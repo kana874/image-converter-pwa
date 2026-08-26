@@ -1,0 +1,80 @@
+(() => {
+"use strict";
+
+const OFFLINE_EMBEDDED=false;
+const $=id=>document.getElementById(id);
+const els={
+ dropZone:$("dropZone"),fileInput:$("fileInput"),quality:$("quality"),qualityNumber:$("qualityNumber"),resizePreset:$("resizePreset"),presetSelect:$("presetSelect"),
+ outputFormat:$("outputFormat"),webpOption:$("webpOption"),convertBtn:$("convertBtn"),downloadAllBtn:$("downloadAllBtn"),zipBtn:$("zipBtn"),clearBtn:$("clearBtn"),
+ list:$("list"),status:$("status"),summary:$("summary"),resultSummary:$("resultSummary"),outputList:$("outputList"),retryFailedBtn:$("retryFailedBtn"),
+ engineTitle:$("engineTitle"),engineSub:$("engineSub"),modeBadge:$("modeBadge"),browserNotice:$("browserNotice"),themeSelect:$("themeSelect"),
+ alphaMode:$("alphaMode"),alphaColor:$("alphaColor"),alphaColorField:$("alphaColorField"),alphaField:$("alphaField"),jpegBgField:$("jpegBgField"),jpegBgColor:$("jpegBgColor"),formatNote:$("formatNote"),
+ customResizeEnable:$("customResizeEnable"),customResizeFields:$("customResizeFields"),customWidth:$("customWidth"),customHeight:$("customHeight"),keepAspect:$("keepAspect"),noUpscale:$("noUpscale"),
+ targetSizeEnable:$("targetSizeEnable"),targetSizeFields:$("targetSizeFields"),targetSizeValue:$("targetSizeValue"),targetSizeUnit:$("targetSizeUnit"),sizeResizeFallback:$("sizeResizeFallback"),
+ filenamePreset:$("filenamePreset"),filenameTemplate:$("filenameTemplate"),commonName:$("commonName"),commonNameField:$("commonNameField"),sequenceStart:$("sequenceStart"),sequenceDigits:$("sequenceDigits"),filenamePreview:$("filenamePreview"),filenamePartSelect:$("filenamePartSelect"),filenamePartAdd:$("filenamePartAdd"),filenameTokenButtons:$("filenameTokenButtons"),
+ zipPreset:$("zipPreset"),zipTemplate:$("zipTemplate"),zipCommonName:$("zipCommonName"),zipCommonNameField:$("zipCommonNameField"),zipPreview:$("zipPreview"),zipPartSelect:$("zipPartSelect"),zipPartAdd:$("zipPartAdd"),zipTokenButtons:$("zipTokenButtons"),
+ removeMetadata:$("removeMetadata"),presetName:$("presetName"),savePresetBtn:$("savePresetBtn"),deletePresetBtn:$("deletePresetBtn"),startupMode:$("startupMode"),capabilityList:$("capabilityList"),
+ progressPanel:$("progressPanel"),progressTitle:$("progressTitle"),progressCurrent:$("progressCurrent"),progressFill:$("progressFill"),progressCount:$("progressCount"),progressStats:$("progressStats"),cancelBtn:$("cancelBtn")
+};
+
+const STORAGE={theme:"heicConverter.v11.theme",startup:"heicConverter.v11.startup",last:"heicConverter.v11.settings",presets:"heicConverter.v11.presets"};
+const IMAGE_EXTENSIONS=[".heic",".heif",".jpg",".jpeg",".png",".webp",".bmp",".gif",".svg",".avif",".tif",".tiff"];
+const MIME_TO_EXT={"image/jpeg":"jpg","image/png":"png","image/webp":"webp"};
+const FILENAME_PRESET_TEMPLATES={same:"{name}",name_sequence:"{name}_{index}",name_date:"{name}_{date}",name_resolution:"{name}_{resolution}",date_name:"{date}_{name}",sequence_only:"{index}",common_sequence:"{common}_{index}"};
+const ZIP_PRESET_TEMPLATES={converted_date:"画像変換_{date}",converted_datetime:"画像変換_{date}_{time}",first_rest:"{first}_他{rest}件",common_date:"{common}_{date}"};
+const BUILTIN_PRESETS={
+ standard:{label:"標準",settings:{outputFormat:"image/jpeg",quality:100,resizePreset:"0",customResizeEnable:false,customWidth:"",customHeight:"",keepAspect:true,noUpscale:true,targetSizeEnable:false,targetSizeValue:500,targetSizeUnit:"1024",sizeResizeFallback:true,alphaMode:"preserve",alphaColor:"#ffffff",jpegBgColor:"#ffffff",removeMetadata:true,filenamePreset:"same",filenameTemplate:"{name}",commonName:"画像",sequenceStart:1,sequenceDigits:"3",zipPreset:"converted_date",zipTemplate:"画像変換_{date}",zipCommonName:"画像変換"}},
+ garoonSmall:{label:"ガルーン 小",settings:{outputFormat:"image/jpeg",quality:90,resizePreset:"800",customResizeEnable:false,targetSizeEnable:false,removeMetadata:true,filenamePreset:"same",filenameTemplate:"{name}"}},
+ garoonLarge:{label:"ガルーン 大",settings:{outputFormat:"image/jpeg",quality:90,resizePreset:"1700",customResizeEnable:false,targetSizeEnable:false,removeMetadata:true,filenamePreset:"same",filenameTemplate:"{name}"}},
+ mail:{label:"メール添付",settings:{outputFormat:"image/jpeg",quality:90,resizePreset:"0",customResizeEnable:true,customWidth:"1920",customHeight:"",keepAspect:true,noUpscale:true,targetSizeEnable:true,targetSizeValue:1,targetSizeUnit:"1048576",sizeResizeFallback:true,removeMetadata:true,filenamePreset:"same",filenameTemplate:"{name}"}},
+ high:{label:"高品質",settings:{outputFormat:"image/jpeg",quality:100,resizePreset:"0",customResizeEnable:false,targetSizeEnable:false,removeMetadata:true,filenamePreset:"same",filenameTemplate:"{name}"}}
+};
+
+let jobs=[],heifModule=null,engineReady=false,userPresets=[],suppressSettingEvents=false;
+let runtime={running:false,cancelRequested:false,runTotal:0,runDone:0,currentJob:null,currentStage:"",zipping:false};
+let capabilities={fileApi:false,blob:false,canvas:false,wasm:false,webp:false,clipboard:false,storage:false,heic:false};
+const engineSource="";
+const systemTheme=window.matchMedia?window.matchMedia("(prefers-color-scheme: dark)"):null;
+
+class AppError extends Error{constructor(code,message,cause){super(message);this.name="AppError";this.code=code;this.cause=cause}}
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
+const fmtBytes=b=>{if(!Number.isFinite(b)||b<=0)return"0 B";const u=["B","KB","MB","GB"],i=Math.min(Math.floor(Math.log(b)/Math.log(1024)),3);return`${(b/1024**i).toFixed(i?1:0)} ${u[i]}`};
+const p2=n=>String(n).padStart(2,"0");
+function dateStamp(){const d=new Date();return`${d.getFullYear()}${p2(d.getMonth()+1)}${p2(d.getDate())}`}
+function timeStamp(){const d=new Date();return`${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`}
+function setStatus(text,kind=""){els.status.textContent=text;els.status.className="status"+(kind?` ${kind}`:"")}
+function storageAvailable(){try{const k="__heic_v11_test__";localStorage.setItem(k,"1");localStorage.removeItem(k);return true}catch(_){return false}}
+function lsGet(key,fallback=null){if(!capabilities.storage)return fallback;try{const v=localStorage.getItem(key);return v===null?fallback:v}catch(_){return fallback}}
+function lsSet(key,value){if(!capabilities.storage)return;try{localStorage.setItem(key,value)}catch(_){}}
+function safeJson(text,fallback){try{return JSON.parse(text)}catch(_){return fallback}}
+function isHeicFile(f){return /\.(heic|heif)$/i.test(f.name)||f.type==="image/heic"||f.type==="image/heif"}
+function isJpegFile(f){return /\.(jpe?g)$/i.test(f.name)||f.type==="image/jpeg"}
+function isLikelyImage(f){if(isHeicFile(f))return true;if(f.type&&f.type.startsWith("image/"))return true;const lower=f.name.toLowerCase();return IMAGE_EXTENSIONS.some(ext=>lower.endsWith(ext))}
+function safeBaseName(name){return name.replace(/\.[^.]*$/,'')||"image"}
+function originalExt(name){const m=name.match(/\.([^.]+)$/);return m?m[1].toLowerCase():""}
+function sanitizeFilename(name){let s=String(name).replace(/[\\/:*?"<>|\x00-\x1f]/g,"_").replace(/[. ]+$/g,"").trim();return s||"image"}
+function ensureExt(name,ext){const re=new RegExp(`\\.${ext.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}$`,"i");return re.test(name)?name:`${name}.${ext}`}
+function uniqueName(name,used){let n=name;if(!used.has(n.toLowerCase())){used.add(n.toLowerCase());return n}const m=n.match(/^(.*?)(\.[^.]+)?$/),base=m[1],ext=m[2]||"";let i=2;while(used.has(`${base}_${i}${ext}`.toLowerCase()))i++;n=`${base}_${i}${ext}`;used.add(n.toLowerCase());return n}
+function clampQuality(v){const n=Math.round(Number(v));return Number.isFinite(n)?clamp(n,1,100):100}
+function getOutputExt(mime){return MIME_TO_EXT[mime]||"jpg"}
+function getOutputLabel(mime){return mime==="image/png"?"PNG":mime==="image/webp"?"WebP":"JPEG"}
+function getConvertButtonText(){const l=getOutputLabel(els.outputFormat.value);return`${l==="JPEG"?"JPG":l}に変換`}
+function normalizeError(e,code="E_UNKNOWN",message="処理に失敗しました。"){if(e instanceof AppError)return e;const text=String(e&&e.message||e||"");if(/memory|allocation|out of memory/i.test(text))return new AppError("E_MEMORY","メモリ不足により処理できませんでした。",e);return new AppError(code,text||message,e)}
+
+function applyThemePreference(pref,save=true){const p=["system","light","dark"].includes(pref)?pref:"system",actual=p==="system"?(systemTheme&&systemTheme.matches?"dark":"light"):p;document.documentElement.dataset.theme=actual;els.themeSelect.value=p;if(save)lsSet(STORAGE.theme,p)}
+function initTheme(){applyThemePreference(lsGet(STORAGE.theme,"system"),false);if(systemTheme)systemTheme.addEventListener?.("change",()=>{if(els.themeSelect.value==="system")applyThemePreference("system",false)})}
+
+function checkCapabilities(){
+ capabilities.fileApi=typeof File!=="undefined"&&typeof FileReader!=="undefined";
+ capabilities.blob=typeof Blob!=="undefined"&&typeof URL!=="undefined"&&typeof URL.createObjectURL==="function";
+ capabilities.canvas=typeof HTMLCanvasElement!=="undefined"&&typeof HTMLCanvasElement.prototype.toBlob==="function";
+ capabilities.wasm=typeof WebAssembly!=="undefined";
+ capabilities.storage=storageAvailable();
+ try{const c=document.createElement("canvas");c.width=c.height=1;capabilities.webp=c.toDataURL("image/webp").startsWith("data:image/webp")}catch(_){capabilities.webp=false}
+ capabilities.clipboard=!!(window.isSecureContext&&navigator.clipboard&&typeof navigator.clipboard.write==="function"&&typeof ClipboardItem!=="undefined"&&(!ClipboardItem.supports||ClipboardItem.supports("image/png")));
+ renderCapabilities();
+}
+function renderCapabilities(){
+ const rows=[["File API",capabilities.fileApi],["Blob / ダウンロード",capabilities.blob],["Canvas画像処理",capabilities.canvas],["WebAssembly",capabilities.wasm],["HEIC / HEIF",capabilities.heic],["WebP出力",capabilities.webp],["画像のクリップボードコピー",capabilities.clipboard],["設定保存（localStorage）",capabilities.storage]];
+ els.capabilityList.innerHTML=rows.map(([n,v])=>`<div class="cap-row"><span>${e
