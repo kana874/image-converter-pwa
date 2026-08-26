@@ -3,11 +3,17 @@ const APP_SHELL = [
   "./",
   "./index.html",
   "./css/app.css",
-  "./js/app.js",
-  "./vendor/heic-offline-engine.js",
+  "./js/app-loader.js",
+  "./js/app-part-01.txt",
+  "./js/app-part-02.txt",
+  "./js/app-part-03.txt",
+  "./js/app-part-04.txt",
+  "./js/app-part-05.txt",
+  "./js/app-part-06.txt",
   "./manifest.json",
   "./icons/icon-192.png",
-  "./icons/icon-512.png"
+  "./icons/icon-512.png",
+  "https://cdn.jsdelivr.net/npm/libheif-js@1.19.8/libheif-wasm/libheif-bundle.js"
 ];
 
 self.addEventListener("install", event => {
@@ -25,9 +31,8 @@ self.addEventListener("activate", event => {
 self.addEventListener("fetch", event => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
-  if (url.origin !== self.location.origin) return;
 
-  if (event.request.mode === "navigate") {
+  if (event.request.mode === "navigate" && url.origin === self.location.origin) {
     event.respondWith(
       fetch(event.request)
         .then(response => {
@@ -42,7 +47,7 @@ self.addEventListener("fetch", event => {
 
   event.respondWith(
     caches.match(event.request).then(cached => cached || fetch(event.request).then(response => {
-      if (response && response.status === 200) {
+      if (response && (response.status === 200 || response.type === "opaque")) {
         const copy = response.clone();
         caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
       }
