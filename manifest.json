@@ -1,0 +1,25 @@
+{
+  "name": "画像変換 - HEIC / HEIF / JPG / PNG / WebP",
+  "short_name": "画像変換",
+  "description": "画像を外部へ送信せず、ブラウザ内でHEIC/HEIF/JPEG/PNG/WebPなどを変換するPWA",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f6f8",
+  "theme_color": "#6077ff",
+  "lang": "ja",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
