@@ -1,0 +1,145 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>画像変換 - HEIC / HEIF / JPG / PNG / WebP</title><link rel="stylesheet" href="./css/app.css">
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#6077ff">
+<meta name="application-name" content="画像変換">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="画像変換">
+<link rel="apple-touch-icon" href="./icons/icon-192.png">
+</head><body>
+<div class="wrap">
+<header>
+  <div><h1>HEIC → JPG</h1><p class="lead">ブラウザ内だけで変換する完全オフライン画像コンバーター</p></div>
+  <div class="header-actions">
+    <div class="theme-box"><label for="themeSelect">テーマ</label><select id="themeSelect"><option value="system">システム設定</option><option value="light">ライト</option><option value="dark">ダーク</option></select></div>
+    <div class="badge" id="modeBadge">完全オフライン版 v11</div>
+  </div>
+</header>
+<main class="panel">
+  <div class="setup" id="setupRow">
+    <div class="setup-text"><div class="setup-title" id="engineTitle">変換エンジン：初期化中</div><div class="setup-sub" id="engineSub">HEIC / HEIF変換エンジンを初期化しています。</div></div>
+  </div>
+  <div id="browserNotice" class="browser-notice hidden"></div>
+
+  <input id="fileInput" type="file" accept=".heic,.heif,.jpg,.jpeg,.png,.webp,.bmp,.gif,.svg,.avif,.tif,.tiff,image/*" multiple hidden>
+  <div id="dropZone" class="drop" tabindex="0" role="button">
+    <div><div class="plus">＋</div><strong>画像ファイルをドロップ</strong><span>HEIC / HEIF を含む画像を追加できます（複数可）</span></div>
+  </div>
+
+  <div class="quick-grid">
+    <div class="presetbox"><label for="presetSelect">設定プリセット</label><select id="presetSelect" data-lock="convert"></select></div>
+    <div class="rangebox"><label for="quality">品質</label><div class="quality-row"><div class="rangewrap"><input id="quality" type="range" min="1" max="100" value="100" step="1" data-lock="convert"></div><input id="qualityNumber" class="quality-num" type="number" min="1" max="100" value="100" step="1" inputmode="numeric" data-lock="convert"></div></div>
+    <div class="presetbox"><label for="resizePreset">リサイズ</label><select id="resizePreset" data-lock="convert"><option value="0">リサイズしない（元サイズ）</option><option value="800">ガルーン貼り付け用：小（幅800ピクセル）</option><option value="1700">ガルーン貼り付け用：大（幅1700ピクセル）</option></select></div>
+  </div>
+  <div class="action-row">
+    <button id="convertBtn" class="primary" disabled>JPGに変換</button>
+    <button id="downloadAllBtn" disabled>すべて保存</button>
+    <button id="zipBtn" class="good" disabled>ZIPでまとめて保存</button>
+    <button id="clearBtn" disabled>クリア</button>
+  </div>
+
+  <div id="progressPanel" class="progress-panel hidden">
+    <div class="progress-head"><div><div id="progressTitle" class="progress-title">変換中</div><div id="progressCurrent" class="progress-sub"></div></div><button id="cancelBtn" class="danger hidden">変換を中止</button></div>
+    <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
+    <div class="progress-meta"><span id="progressCount">0 / 0</span><span id="progressStats">成功 0 / 警告 0 / 失敗 0</span></div>
+  </div>
+
+  <details class="advanced" id="advancedSettings">
+    <summary>高度な設定</summary>
+
+    <div class="adv-section">
+      <div class="adv-title">出力形式</div>
+      <div class="advanced-grid">
+        <div class="field"><label for="outputFormat">形式</label><select id="outputFormat" data-lock="convert"><option value="image/jpeg" selected>JPEG / JPG（標準）</option><option value="image/png">PNG</option><option id="webpOption" value="image/webp">WebP</option></select></div>
+        <div class="field" id="alphaField"><label for="alphaMode">透明部分の扱い（PNG / WebP）</label><select id="alphaMode" data-lock="convert"><option value="preserve" selected>透明を保持</option><option value="white">白背景にする</option><option value="black">黒背景にする</option><option value="custom">背景色を指定</option></select></div>
+        <div class="field compact" id="alphaColorField"><label for="alphaColor">背景色</label><input id="alphaColor" type="color" value="#ffffff" data-lock="convert"></div>
+        <div class="field compact" id="jpegBgField"><label for="jpegBgColor">JPGの透明部分の背景色</label><input id="jpegBgColor" type="color" value="#ffffff" data-lock="convert"></div>
+      </div>
+      <div class="smallnote" id="formatNote"></div>
+    </div>
+
+    <div class="adv-section">
+      <div class="adv-title">解像度指定</div>
+      <label class="checkline"><input id="customResizeEnable" type="checkbox" data-lock="convert"> 任意の解像度を指定する</label>
+      <div class="advanced-grid" id="customResizeFields">
+        <div class="field"><label for="customWidth">幅（px）</label><input id="customWidth" type="number" min="1" step="1" placeholder="例：1920" data-lock="convert"></div>
+        <div class="field"><label for="customHeight">高さ（px）</label><input id="customHeight" type="number" min="1" step="1" placeholder="例：1080" data-lock="convert"></div>
+        <div class="field wide"><label class="checkline"><input id="keepAspect" type="checkbox" checked data-lock="convert"> アスペクト比を維持</label><label class="checkline"><input id="noUpscale" type="checkbox" checked data-lock="convert"> 元画像より拡大しない</label></div>
+      </div>
+      <div class="smallnote">通常画面の800px / 1700pxは従来どおり「幅」を基準にします。任意指定を有効にするとこちらを優先します。</div>
+    </div>
+
+    <div class="adv-section">
+      <div class="adv-title">ファイルサイズ</div>
+      <label class="checkline"><input id="targetSizeEnable" type="checkbox" data-lock="convert"> ファイルサイズの上限を指定する</label>
+      <div class="advanced-grid" id="targetSizeFields">
+        <div class="field"><label for="targetSizeValue">上限</label><input id="targetSizeValue" type="number" min="1" step="0.1" value="500" data-lock="convert"></div>
+        <div class="field"><label for="targetSizeUnit">単位</label><select id="targetSizeUnit" data-lock="convert"><option value="1024" selected>KB</option><option value="1048576">MB</option></select></div>
+        <div class="field wide"><label class="checkline"><input id="sizeResizeFallback" type="checkbox" checked data-lock="convert"> 品質調整だけで収まらない場合は解像度も縮小</label></div>
+      </div>
+      <div class="smallnote">JPG / WebPは指定サイズ以下で可能な限り高い品質を自動探索します。PNGは必要に応じて解像度を縮小します。</div>
+    </div>
+
+    <div class="adv-section">
+      <div class="adv-title">画像ファイル名</div>
+      <div class="advanced-grid">
+        <div class="field"><label for="filenamePreset">命名パターン</label><select id="filenamePreset" data-lock="convert"><option value="same">元ファイル名</option><option value="name_sequence">元ファイル名＋連番</option><option value="name_date">元ファイル名＋日付</option><option value="name_resolution">元ファイル名＋解像度</option><option value="date_name">日付＋元ファイル名</option><option value="sequence_only">連番のみ</option><option value="common_sequence">共通名＋連番</option><option value="custom">カスタム</option></select></div>
+        <div class="field" id="commonNameField"><label for="commonName">共通名</label><input id="commonName" type="text" value="画像" data-lock="convert"></div>
+        <div class="field"><label for="sequenceStart">連番の開始番号</label><input id="sequenceStart" type="number" min="0" step="1" value="1" data-lock="convert"></div>
+        <div class="field"><label for="sequenceDigits">連番の桁数</label><select id="sequenceDigits" data-lock="convert"><option value="2">2桁</option><option value="3" selected>3桁</option><option value="4">4桁</option><option value="5">5桁</option></select></div>
+      </div>
+      <div class="naming-box">
+        <div class="field"><label for="filenameTemplate">テンプレート（直接編集できます）</label><input id="filenameTemplate" type="text" value="{name}" spellcheck="false" data-lock="convert"></div>
+        <div class="token-row" id="filenameTokenButtons"><button type="button" data-token="{name}">元ファイル名</button><button type="button" data-token="{index}">連番</button><button type="button" data-token="{date}">日付</button><button type="button" data-token="{time}">時刻</button><button type="button" data-token="{resolution}">解像度</button><button type="button" data-token="{format}">形式</button><button type="button" data-token="{quality}">品質</button></div>
+        <div class="insert-row"><select id="filenamePartSelect"><option value="{name}">元ファイル名</option><option value="{index}">連番</option><option value="{date}">日付</option><option value="{time}">時刻</option><option value="{resolution}">解像度</option><option value="{width}">幅</option><option value="{height}">高さ</option><option value="{format}">形式</option><option value="{quality}">品質</option><option value="{origext}">元拡張子</option><option value="_">区切り：_</option><option value="-">区切り：-</option><option value=" ">区切り：スペース</option></select><button id="filenamePartAdd" type="button">追加</button></div>
+        <div id="filenamePreview" class="preview-box"></div>
+        <div class="smallnote">拡張子は自動で付加します。テンプレート記法を覚える必要はありません。ボタンやリストから部品を追加できます。</div>
+      </div>
+    </div>
+
+    <div class="adv-section">
+      <div class="adv-title">ZIPファイル名</div>
+      <div class="advanced-grid">
+        <div class="field"><label for="zipPreset">命名パターン</label><select id="zipPreset"><option value="converted_date">画像変換＋日付</option><option value="converted_datetime">画像変換＋日時</option><option value="first_rest">最初のファイル名＋他○件</option><option value="common_date">共通名＋日付</option><option value="custom">カスタム</option></select></div>
+        <div class="field" id="zipCommonNameField"><label for="zipCommonName">共通名</label><input id="zipCommonName" type="text" value="画像変換"></div>
+      </div>
+      <div class="naming-box">
+        <div class="field"><label for="zipTemplate">ZIP名テンプレート（直接編集できます）</label><input id="zipTemplate" type="text" value="画像変換_{date}" spellcheck="false"></div>
+        <div class="token-row" id="zipTokenButtons"><button type="button" data-token="{date}">日付</button><button type="button" data-token="{time}">時刻</button><button type="button" data-token="{count}">枚数</button><button type="button" data-token="{first}">最初のファイル名</button><button type="button" data-token="{rest}">残り件数</button><button type="button" data-token="{common}">共通名</button></div>
+        <div class="insert-row"><select id="zipPartSelect"><option value="{date}">日付</option><option value="{time}">時刻</option><option value="{count}">枚数</option><option value="{first}">最初のファイル名</option><option value="{rest}">残り件数</option><option value="{common}">共通名</option><option value="_">区切り：_</option><option value="-">区切り：-</option><option value=" ">区切り：スペース</option></select><button id="zipPartAdd" type="button">追加</button></div>
+        <div id="zipPreview" class="preview-box"></div>
+      </div>
+    </div>
+
+    <div class="adv-section">
+      <div class="adv-title">EXIF / メタデータ</div>
+      <label class="checkline"><input id="removeMetadata" type="checkbox" checked data-lock="convert"> EXIF・GPS位置情報などのメタデータを削除する</label>
+      <div class="smallnote">ON推奨。OFFはJPEG→JPEGの場合のみ、元JPEGのEXIFを可能な範囲で引き継ぎます。</div>
+    </div>
+
+    <div class="adv-section">
+      <div class="adv-title">プリセット管理</div>
+      <div class="preset-tools"><div class="field"><label for="presetName">現在の設定を保存する名前</label><input id="presetName" type="text" placeholder="例：社内報告用"></div><button id="savePresetBtn" type="button">現在の設定を保存</button><button id="deletePresetBtn" type="button" class="danger" disabled>選択プリセットを削除</button></div>
+      <div class="smallnote">ユーザー作成プリセットはこのブラウザ内に保存します。HTMLファイル自体は変更しません。</div>
+    </div>
+
+    <div class="adv-section">
+      <div class="adv-title">アプリ設定・ブラウザ対応</div>
+      <div class="advanced-grid"><div class="field"><label for="startupMode">起動時の変換設定</label><select id="startupMode"><option value="standard">毎回、標準設定で起動</option><option value="last">前回使用した設定を復元</option></select></div></div>
+      <details class="subdetails" open><summary>ブラウザ対応状況</summary><div id="capabilityList" class="cap-list"></div></details>
+    </div>
+  </details>
+
+  <div id="status" class="status"></div>
+  <div class="bar"><h2>変換待ち</h2><div class="bar-actions"><span id="summary">0 ファイル</span></div></div>
+  <div id="list" class="file-list"></div>
+  <div class="bar"><h2>変換結果</h2><div class="bar-actions"><span id="resultSummary">0 件</span><button id="retryFailedBtn" class="hidden" type="button">失敗した項目を再試行</button></div></div>
+  <div id="outputList" class="output-list"></div>
+
+  <div class="note">画像ファイルは外部へ送信しません。変換処理はブラウザ内で実行します。初回読み込み後はPWAキャッシュによりオフラインでも利用できます。<br>一部のブラウザ機能が利用できない場合も、利用可能な機能だけで動作を継続します。</div>
+</main>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/libheif-js@1.19.8/libheif-wasm/libheif-bundle.js"></script>
+<script src="./js/app-loader.js"></script>
+</body></html>
