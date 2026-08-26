@@ -1,0 +1,12 @@
+ssList.remove("hidden");
+                notice.innerHTML = "<strong>更新があります。</strong> ページを再読み込みすると新しいバージョンを利用できます。";
+              }
+            }
+          });
+        });
+      } catch (error) {
+        console.warn("Service Worker registration failed:", error);
+      }
+    });
+  }
+})();
