@@ -1,0 +1,56 @@
+)
+}
+function convertAll(){if(jobs.length)runJobs([...jobs],{fresh:true})}
+function retryJobs(js){if(js.length)runJobs(js,{fresh:false})}
+function retryFailed(){retryJobs(jobs.filter(j=>j.status==="error"))}
+
+async function copyJobOutput(job){if(!job.output)return;if(!capabilities.clipboard){setStatus("このブラウザでは画像のクリップボードコピーを利用できません。","warn");return}try{let blob=job.output.blob;if(blob.type!=="image/png"){let img=await loadImageBitmapFromBlob(blob);try{const w=img.width||img.naturalWidth,h=img.height||img.naturalHeight,c=document.createElement("canvas");c.width=w;c.height=h;const ctx=c.getContext("2d",{alpha:true});ctx.drawImage(img,0,0);blob=await canvasToBlob(c,"image/png");c.width=c.height=1}finally{try{img.close?.()}catch(_){}}}await navigator.clipboard.write([new ClipboardItem({"image/png":blob})]);job.copyState="copied";renderResults();setStatus(`${job.output.name} をクリップボードにコピーしました。`,"success")}catch(e){const er=normalizeError(e,"E_CLIPBOARD","クリップボードへのコピーに失敗しました。");job.copyState="error";setStatus(`${er.message} 「保存」を使用してください。`,"warn")}}
+async function downloadAll(){for(const j of jobs.filter(j=>j.output)){const a=document.createElement("a");a.href=j.output.url;a.download=j.output.name;document.body.appendChild(a);a.click();a.remove();await new Promise(r=>setTimeout(r,160))}}
+
+const CRC_TABLE=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=(c&1)?0xedb88320^(c>>>1):c>>>1;t[n]=c>>>0}return t})();
+function crc32(bytes){let c=0xffffffff;for(let i=0;i<bytes.length;i++)c=CRC_TABLE[(c^bytes[i])&255]^(c>>>8);return(c^0xffffffff)>>>0}
+function dosDateTime(d=new Date()){let year=Math.max(1980,d.getFullYear());const date=((year-1980)<<9)|((d.getMonth()+1)<<5)|d.getDate(),time=(d.getHours()<<11)|(d.getMinutes()<<5)|(d.getSeconds()>>1);return{date,time}}
+function zipLocalHeader(nameBytes,crc,size,dt){const b=new Uint8Array(30+nameBytes.length),v=new DataView(b.buffer);v.setUint32(0,0x04034b50,true);v.setUint16(4,20,true);v.setUint16(6,0x0800,true);v.setUint16(8,0,true);v.setUint16(10,dt.time,true);v.setUint16(12,dt.date,true);v.setUint32(14,crc,true);v.setUint32(18,size,true);v.setUint32(22,size,true);v.setUint16(26,nameBytes.length,true);v.setUint16(28,0,true);b.set(nameBytes,30);return b}
+function zipCentralHeader(nameBytes,crc,size,offset,dt){const b=new Uint8Array(46+nameBytes.length),v=new DataView(b.buffer);v.setUint32(0,0x02014b50,true);v.setUint16(4,20,true);v.setUint16(6,20,true);v.setUint16(8,0x0800,true);v.setUint16(10,0,true);v.setUint16(12,dt.time,true);v.setUint16(14,dt.date,true);v.setUint32(16,crc,true);v.setUint32(20,size,true);v.setUint32(24,size,true);v.setUint16(28,nameBytes.length,true);v.setUint16(30,0,true);v.setUint16(32,0,true);v.setUint16(34,0,true);v.setUint16(36,0,true);v.setUint32(38,0,true);v.setUint32(42,offset,true);b.set(nameBytes,46);return b}
+function zipEocd(count,centralSize,centralOffset){const b=new Uint8Array(22),v=new DataView(b.buffer);v.setUint32(0,0x06054b50,true);v.setUint16(4,0,true);v.setUint16(6,0,true);v.setUint16(8,count,true);v.setUint16(10,count,true);v.setUint32(12,centralSize,true);v.setUint32(16,centralOffset,true);v.setUint16(20,0,true);return b}
+async function createStoreZip(items){if(items.length>65535)throw new AppError("E_ZIP","ZIPに含められるファイル数を超えています。");const enc=new TextEncoder(),parts=[],centrals=[];let offset=0;const dt=dosDateTime();for(let i=0;i<items.length;i++){const {name,blob}=items[i];if(blob.size>=0xffffffff)throw new AppError("E_ZIP","4GB以上の単一ファイルには対応していません。");const nameBytes=enc.encode(name);if(nameBytes.length>65535)throw new AppError("E_ZIP","ZIP内のファイル名が長すぎます。");setStatus(`ZIP作成中 ${i+1} / ${items.length}：${name}`,"working");const bytes=new Uint8Array(await blob.arrayBuffer()),crc=crc32(bytes),local=zipLocalHeader(nameBytes,crc,blob.size,dt),central=zipCentralHeader(nameBytes,crc,blob.size,offset,dt);parts.push(local,blob);centrals.push(central);offset+=local.byteLength+blob.size;if(offset>=0xffffffff)throw new AppError("E_ZIP","ZIP全体が大きすぎます。ZIP64には対応していません。");await new Promise(r=>setTimeout(r,0))}const centralOffset=offset,centralSize=centrals.reduce((s,b)=>s+b.byteLength,0);if(centralOffset+centralSize>=0xffffffff)throw new AppError("E_ZIP","ZIP全体が大きすぎます。");parts.push(...centrals,zipEocd(items.length,centralSize,centralOffset));return new Blob(parts,{type:"application/zip"})}
+async function downloadZip(){if(runtime.running||runtime.zipping)return;const out=jobs.filter(j=>j.output);if(!out.length)return;runtime.zipping=true;updateMainButtons();try{const total=out.reduce((s,j)=>s+j.output.blob.size,0);if(total>500*1024*1024)setStatus(`ZIP対象は合計 ${fmtBytes(total)} です。メモリ使用量が増える可能性があります。`,"warn");const blob=await createStoreZip(out.map(j=>({name:j.output.name,blob:j.output.blob}))),name=buildZipName(out.length),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);setStatus(`${out.length} 件を ${name} にまとめて保存しました。`,"success")}catch(e){const er=normalizeError(e,"E_ZIP","ZIP作成に失敗しました。");console.error(er);setStatus(er.message,"error")}finally{runtime.zipping=false;updateMainButtons()}}
+
+function initSettings(){loadUserPresets();populatePresetSelect("builtin:standard");const startup=lsGet(STORAGE.startup,"standard");els.startupMode.value=["standard","last"].includes(startup)?startup:"standard";if(els.startupMode.value==="last"){const saved=safeJson(lsGet(STORAGE.last,"null"),null);if(saved&&saved.settings){applySettings(saved.settings,true);els.presetSelect.value="custom"}else{applySettings(BUILTIN_PRESETS.standard.settings,true);els.presetSelect.value="builtin:standard"}}else{applySettings(BUILTIN_PRESETS.standard.settings,true);els.presetSelect.value="builtin:standard"}updateDeletePresetButton()}
+function onConversionSettingChanged(e){if(suppressSettingEvents)return;if(e?.target===els.filenamePreset){setFilenamePresetTemplate();return}if(e?.target===els.zipPreset){setZipPresetTemplate();return}if(e?.target===els.filenameTemplate)els.filenamePreset.value="custom";if(e?.target===els.zipTemplate)els.zipPreset.value="custom";if(e?.target===els.quality)syncQualityFromRange();if(e?.target===els.qualityNumber)syncQualityFromNumber();markCurrentCustom(true);updateAdvancedUi()}
+function bindEvents(){
+ els.themeSelect.onchange=()=>applyThemePreference(els.themeSelect.value,true);els.presetSelect.onchange=applySelectedPreset;els.savePresetBtn.onclick=saveCurrentPreset;els.deletePresetBtn.onclick=deleteSelectedPreset;els.startupMode.onchange=()=>{lsSet(STORAGE.startup,els.startupMode.value)};
+ const settingEls=[els.quality,els.qualityNumber,els.resizePreset,els.outputFormat,els.alphaMode,els.alphaColor,els.jpegBgColor,els.customResizeEnable,els.customWidth,els.customHeight,els.keepAspect,els.noUpscale,els.targetSizeEnable,els.targetSizeValue,els.targetSizeUnit,els.sizeResizeFallback,els.filenamePreset,els.filenameTemplate,els.commonName,els.sequenceStart,els.sequenceDigits,els.zipPreset,els.zipTemplate,els.zipCommonName,els.removeMetadata];for(const el of settingEls){el.addEventListener("input",onConversionSettingChanged);el.addEventListener("change",onConversionSettingChanged)}
+ 
+ els.filenameTokenButtons.onclick=e=>{const b=e.target.closest("button[data-token]");if(!b)return;els.filenamePreset.value="custom";insertAtCursor(els.filenameTemplate,b.dataset.token)};els.filenamePartAdd.onclick=()=>{els.filenamePreset.value="custom";insertAtCursor(els.filenameTemplate,els.filenamePartSelect.value)};
+ els.zipTokenButtons.onclick=e=>{const b=e.target.closest("button[data-token]");if(!b)return;els.zipPreset.value="custom";insertAtCursor(els.zipTemplate,b.dataset.token)};els.zipPartAdd.onclick=()=>{els.zipPreset.value="custom";insertAtCursor(els.zipTemplate,els.zipPartSelect.value)};
+ els.dropZone.onclick=()=>{if(!runtime.running)els.fileInput.click()};els.dropZone.onkeydown=e=>{if((e.key==="Enter"||e.key===" ")&&!runtime.running){e.preventDefault();els.fileInput.click()}};els.fileInput.onchange=()=>{addFiles(els.fileInput.files);els.fileInput.value=""};["dragenter","dragover"].forEach(t=>els.dropZone.addEventListener(t,e=>{e.preventDefault();if(!runtime.running)els.dropZone.classList.add("drag")}));["dragleave","drop"].forEach(t=>els.dropZone.addEventListener(t,e=>{e.preventDefault();els.dropZone.classList.remove("drag")}));els.dropZone.addEventListener("drop",e=>{if(!runtime.running)addFiles(e.dataTransfer.files)});
+ els.convertBtn.onclick=convertAll;els.clearBtn.onclick=clearAll;els.downloadAllBtn.onclick=downloadAll;els.zipBtn.onclick=downloadZip;els.cancelBtn.onclick=()=>{runtime.cancelRequested=true;els.cancelBtn.disabled=true;els.cancelBtn.textContent="中止待ち…";setStatus("現在処理中の画像が完了した後に停止します。","warn")};els.retryFailedBtn.onclick=retryFailed;
+ window.addEventListener("beforeunload",()=>releaseAllOutputs());
+}
+
+async function startup(){checkCapabilities();initTheme();initSettings();bindEvents();updateAdvancedUi();renderAll();await initializeEngine();renderCapabilities()}
+startup();
+})();
+
+
+// GitHub Pages / PWA bootstrap (v1.0.0)
+(() => {
+  const APP_VERSION = "1.0.0";
+  window.addEventListener("DOMContentLoaded", () => {
+    const badge = document.getElementById("modeBadge");
+    if (badge) badge.textContent = `GitHub / PWA版 v${APP_VERSION}（変換エンジン v11）`;
+  });
+
+  if ("serviceWorker" in navigator && location.protocol !== "file:") {
+    window.addEventListener("load", async () => {
+      try {
+        const registration = await navigator.serviceWorker.register("./service-worker.js", { scope: "./" });
+        registration.addEventListener("updatefound", () => {
+          const worker = registration.installing;
+          if (!worker) return;
+          worker.addEventListener("statechange", () => {
+            if (worker.state === "installed" && navigator.serviceWorker.controller) {
+              const notice = document.getElementById("browserNotice");
+              if (notice) {
+                notice.cla
