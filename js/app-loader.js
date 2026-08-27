@@ -5,6 +5,22 @@
     (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
     window.navigator.standalone === true;
 
+  const isIOS = () => {
+    const ua = window.navigator.userAgent || '';
+    return /iPhone|iPad|iPod/i.test(ua) ||
+      (window.navigator.platform === 'MacIntel' && window.navigator.maxTouchPoints > 1);
+  };
+
+  const showIOSInstallGuide = () => {
+    window.alert(
+      'iPhone / iPadでは共有メニューからホーム画面に追加します。\n\n' +
+      '1. ブラウザの「共有」ボタン（□↑）をタップ\n' +
+      '2. 「ホーム画面に追加」をタップ\n' +
+      '3. 右上の「追加」をタップ\n\n' +
+      '「ホーム画面に追加」が見つからない場合は、共有メニューを下へスクロールしてください。'
+    );
+  };
+
   const ensureInstallButton = () => {
     let button = document.getElementById('btnInstallApp');
     if (button) return button;
@@ -15,17 +31,21 @@
     button = document.createElement('button');
     button.id = 'btnInstallApp';
     button.type = 'button';
-    button.textContent = 'アプリとしてインストール';
-    button.hidden = true;
+    button.textContent = isIOS() ? 'ホーム画面に追加する方法' : 'アプリとしてインストール';
+    button.setAttribute('aria-label', button.textContent);
+    button.hidden = isStandalone() || !isIOS();
     button.addEventListener('click', async () => {
-      if (!deferredInstallPrompt) return;
-      deferredInstallPrompt.prompt();
-      try {
-        await deferredInstallPrompt.userChoice;
-      } finally {
-        deferredInstallPrompt = null;
-        button.hidden = true;
+      if (deferredInstallPrompt) {
+        deferredInstallPrompt.prompt();
+        try {
+          await deferredInstallPrompt.userChoice;
+        } finally {
+          deferredInstallPrompt = null;
+          button.hidden = true;
+        }
+        return;
       }
+      if (isIOS()) showIOSInstallGuide();
     });
     host.appendChild(button);
     return button;
@@ -38,7 +58,11 @@
     event.preventDefault();
     deferredInstallPrompt = event;
     const button = ensureInstallButton();
-    if (button) button.hidden = false;
+    if (button) {
+      button.textContent = 'アプリとしてインストール';
+      button.setAttribute('aria-label', button.textContent);
+      button.hidden = false;
+    }
   });
 
   window.addEventListener('appinstalled', () => {
