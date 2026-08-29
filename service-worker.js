@@ -31,8 +31,13 @@ self.addEventListener("activate", event => {
 self.addEventListener("fetch", event => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
+  const scopeUrl = new URL(self.registration.scope);
+  const appIndexUrl = new URL("./index.html", self.registration.scope);
+  const isAppShellNavigation = event.request.mode === "navigate" &&
+    url.origin === self.location.origin &&
+    (url.pathname === scopeUrl.pathname || url.pathname === appIndexUrl.pathname);
 
-  if (event.request.mode === "navigate" && url.origin === self.location.origin) {
+  if (isAppShellNavigation) {
     event.respondWith(
       fetch(event.request)
         .then(response => {
