@@ -35,3 +35,11 @@ https://kana874.github.io/image-converter-pwa/
 
 - PWA版: 1.0.0
 - ベース: HEIC → JPG Offline v11
+
+## AI共有knowledge
+
+- AI向けの正本索引: [`.ai/INDEX.md`](.ai/INDEX.md)
+- Gemini Web等の互換読取ページ: [`ai-knowledge/`](ai-knowledge/)
+- 機械可読メタデータ: [`ai-knowledge/phase4.json`](ai-knowledge/phase4.json)
+
+`.ai/` を正本とし、公開互換ページとの一致は `npm test` で検査します。
