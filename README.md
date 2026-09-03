@@ -7,6 +7,7 @@ HEIC / HEIF を含む画像をブラウザ内で変換する GitHub Pages / PWA 
 - HEIC / HEIF / JPEG / PNG / WebP / BMP / GIF / SVG / AVIF / TIFF等の読み込み
 - JPEG / PNG / WebPへの変換
 - 複数画像の一括処理、ドラッグ＆ドロップ
+- 画像ごとの左90° / 右90° / 180°回転、回転リセット
 - 品質指定、幅800px / 1700px、任意解像度
 - 目標ファイルサイズに合わせた品質・解像度調整
 - ファイル名テンプレート、プリセット保存
@@ -33,7 +34,7 @@ https://kana874.github.io/image-converter-pwa/
 
 ## バージョン
 
-- PWA版: 1.0.0
+- PWA版: 1.1.0
 - ベース: HEIC → JPG Offline v11
 
 ## AI共有knowledge
