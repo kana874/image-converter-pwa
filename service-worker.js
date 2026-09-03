@@ -1,4 +1,4 @@
-const CACHE_NAME = "image-converter-pwa-v1.0.2";
+const CACHE_NAME = "image-converter-pwa-v1.1.0";
 const APP_SHELL = [
   "./",
   "./index.html",
