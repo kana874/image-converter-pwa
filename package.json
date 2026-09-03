@@ -1,6 +1,6 @@
 {
   "name": "image-converter-pwa",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "scripts": {
     "test": "node scripts/check-app-structure.js && node scripts/check-ai-knowledge-mirror.js"
