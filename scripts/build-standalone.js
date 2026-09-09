@@ -145,7 +145,7 @@ async function main() {
   const STANDALONE_VERSION=${JSON.stringify(pkg.version)};
   const applyStandaloneLabel=()=>{
     const badge=document.getElementById('modeBadge');
-    if(badge)badge.textContent=`単一HTML版 v${STANDALONE_VERSION} / 完全オフライン`;
+    if(badge)badge.textContent='単一HTML版 v'+STANDALONE_VERSION+' / 完全オフライン';
     const sub=document.getElementById('engineSub');
     if(sub&&sub.textContent.includes('ブラウザ内'))sub.textContent+=' 外部ネットワーク接続は使用しません。';
   };
