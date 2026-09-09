@@ -1,6 +1,6 @@
 
 // JPEG XL support (WASM via @jsquash/jxl 1.3.0)
-const JXL_MODULE_URL="https://cdn.jsdelivr.net/npm/@jsquash/jxl@1.3.0/+esm";
+const JXL_MODULE_URL="https://esm.sh/@jsquash/jxl@1.3.0";
 let jxlModulePromise=null;
 let jxlLosslessField=null;
 let jxlLosslessInput=null;
