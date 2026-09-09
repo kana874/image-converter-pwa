@@ -1,0 +1,114 @@
+
+// JPEG XL support (WASM via @jsquash/jxl 1.3.0)
+const JXL_MODULE_URL="https://esm.sh/@jsquash/jxl@1.3.0";
+let jxlModulePromise=null;
+let jxlLosslessField=null;
+let jxlLosslessInput=null;
+
+function isJxlFile(file){
+ const name=String(file&&file.name||"");
+ return /\.jxl$/i.test(name)||String(file&&file.type||"").toLowerCase()==="image/jxl";
+}
+async function getJxlModule(){
+ if(!jxlModulePromise){
+  jxlModulePromise=import(JXL_MODULE_URL).then(mod=>{
+   if(!(mod&&typeof mod.encode==="function"&&typeof mod.decode==="function"))throw new Error("JPEG XL codec exports are unavailable.");
+   return mod;
+  }).catch(error=>{jxlModulePromise=null;throw new AppError("E_JXL_ENGINE","JPEG XL変換エンジンを読み込めませんでした。オンライン状態で再試行してください。",error)});
+ }
+ return jxlModulePromise;
+}
+function installJxlUi(){
+ if(!els.outputFormat.querySelector('option[value="image/jxl"]')){
+  const option=document.createElement("option");option.id="jxlOption";option.value="image/jxl";option.textContent="JPEG XL / JXL";els.outputFormat.appendChild(option);
+ }
+ if(!els.fileInput.accept.includes(".jxl"))els.fileInput.accept+=",.jxl,image/jxl";
+ if(!IMAGE_EXTENSIONS.includes(".jxl"))IMAGE_EXTENSIONS.push(".jxl");
+ const alphaLabel=els.alphaField?.querySelector("label");if(alphaLabel)alphaLabel.textContent="透明部分の扱い（PNG / WebP / JXL）";
+ const outputGrid=els.outputFormat.closest(".advanced-grid");
+ if(outputGrid&&!document.getElementById("jxlLossless")){
+  jxlLosslessField=document.createElement("div");jxlLosslessField.className="field hidden-field";jxlLosslessField.id="jxlLosslessField";
+  jxlLosslessField.innerHTML='<label class="checkline"><input id="jxlLossless" type="checkbox" data-lock="convert"> JXLをロスレス（画素可逆）で保存</label>';
+  outputGrid.appendChild(jxlLosslessField);jxlLosslessInput=document.getElementById("jxlLossless");
+  jxlLosslessInput.addEventListener("change",()=>{if(suppressSettingEvents)return;markCurrentCustom(true);updateAdvancedUi()});
+ }
+ document.title="画像変換 - HEIC / HEIF / JPG / PNG / WebP / JXL";
+ const heading=document.querySelector("header h1");if(heading)heading.textContent="画像変換";
+ const dropText=els.dropZone?.querySelector("span");if(dropText)dropText.textContent="HEIC / HEIF / JXL を含む画像を追加できます（複数可）";
+}
+installJxlUi();
+
+const baseGetOutputExt=getOutputExt;
+getOutputExt=function(mime){return mime==="image/jxl"?"jxl":baseGetOutputExt(mime)};
+const baseGetOutputLabel=getOutputLabel;
+getOutputLabel=function(mime){return mime==="image/jxl"?"JXL":baseGetOutputLabel(mime)};
+
+const baseLoadImageBitmapFromBlob=loadImageBitmapFromBlob;
+loadImageBitmapFromBlob=async function(blob){
+ if(blob&&blob.type==="image/jxl"){
+  const mod=await getJxlModule(),imageData=await mod.decode(await blob.arrayBuffer());
+  const canvas=document.createElement("canvas");canvas.width=imageData.width;canvas.height=imageData.height;
+  const ctx=canvas.getContext("2d",{alpha:true});if(!ctx)throw new AppError("E_CANVAS","Canvasを初期化できません。");ctx.putImageData(imageData,0,0);return canvas;
+ }
+ return baseLoadImageBitmapFromBlob(blob);
+};
+
+const baseDecodeToCanvas=decodeToCanvas;
+decodeToCanvas=async function(file){
+ if(!isJxlFile(file))return baseDecodeToCanvas(file);
+ let buffer;try{buffer=await file.arrayBuffer()}catch(error){throw new AppError("E_FILE_READ","JXLファイルを読み込めませんでした。",error)}
+ try{
+  const mod=await getJxlModule(),imageData=await mod.decode(buffer),width=imageData.width,height=imageData.height;
+  if(!width||!height)throw new Error("Invalid JPEG XL dimensions");
+  const canvas=document.createElement("canvas");canvas.width=width;canvas.height=height;const ctx=canvas.getContext("2d",{alpha:true});
+  if(!ctx)throw new AppError("E_CANVAS","Canvasを初期化できません。");ctx.putImageData(imageData,0,0);return{canvas,width,height};
+ }catch(error){if(error instanceof AppError)throw error;throw new AppError("E_JXL_DECODE","JPEG XL画像をデコードできませんでした。",error)}
+};
+
+const baseCanvasToBlob=canvasToBlob;
+canvasToBlob=async function(canvas,mime,q){
+ if(mime!=="image/jxl")return baseCanvasToBlob(canvas,mime,q);
+ try{
+  const ctx=canvas.getContext("2d",{alpha:true,willReadFrequently:true});if(!ctx)throw new AppError("E_CANVAS","JXL出力用Canvasを読み取れません。");
+  const imageData=ctx.getImageData(0,0,canvas.width,canvas.height),mod=await getJxlModule(),lossless=!!jxlLosslessInput?.checked;
+  const quality=lossless?100:clamp(Math.round((Number(q)||1)*100),1,100),buffer=await mod.encode(imageData,{quality,lossless,effort:7});
+  return new Blob([buffer],{type:"image/jxl"});
+ }catch(error){if(error instanceof AppError)throw error;throw new AppError("E_JXL_ENCODE","JPEG XL画像の生成に失敗しました。",error)}
+};
+
+const baseEncodeAtBestQuality=encodeAtBestQuality;
+encodeAtBestQuality=async function(canvas,mime,maxQ,targetBytes){
+ if(mime==="image/jxl"&&jxlLosslessInput?.checked){const blob=await canvasToBlob(canvas,mime,1);return{blob,qualityUsed:null,sizeMet:!targetBytes||blob.size<=targetBytes}}
+ return baseEncodeAtBestQuality(canvas,mime,maxQ,targetBytes);
+};
+
+const baseCreateThumbnailUrl=createThumbnailUrl;
+createThumbnailUrl=async function(blob){
+ if(!(blob&&blob.type==="image/jxl"))return baseCreateThumbnailUrl(blob);
+ let img;try{
+  img=await loadImageBitmapFromBlob(blob);const w=img.width||img.naturalWidth,h=img.height||img.naturalHeight,scale=Math.min(1,640/Math.max(w,h)),tw=Math.max(1,Math.round(w*scale)),th=Math.max(1,Math.round(h*scale)),c=document.createElement("canvas");
+  c.width=tw;c.height=th;const ctx=c.getContext("2d",{alpha:true});if(!ctx)return null;ctx.drawImage(img,0,0,tw,th);const preview=await baseCanvasToBlob(c,"image/jpeg",.82);c.width=c.height=1;return URL.createObjectURL(preview);
+ }catch(error){console.warn("JXL preview generation failed",error);return null}finally{try{img?.close?.()}catch(_){}}
+};
+
+const baseUpdateFormatUi=updateFormatUi;
+updateFormatUi=function(){
+ if(els.outputFormat.value!=="image/jxl"){
+  if(jxlLosslessField)jxlLosslessField.classList.add("hidden-field");
+  els.removeMetadata.disabled=runtime.running;baseUpdateFormatUi();return;
+ }
+ const lossless=!!jxlLosslessInput?.checked;
+ if(jxlLosslessField)jxlLosslessField.classList.remove("hidden-field");
+ els.quality.disabled=els.qualityNumber.disabled=runtime.running||lossless;
+ els.alphaField.classList.remove("hidden-field");els.jpegBgField.classList.add("hidden-field");els.alphaColorField.classList.toggle("hidden-field",els.alphaMode.value!=="custom");
+ els.formatNote.textContent=lossless?"JXLロスレスは画素を可逆圧縮します。品質値は使用しません。EXIF等のメタデータは保持しません。":"JXLはWASMでエンコードします。品質設定と透明保持に対応します。EXIF等のメタデータは保持しません。";
+ els.convertBtn.textContent=getConvertButtonText();
+};
+
+const baseConvertOne=convertOne;
+convertOne=async function(job,mime,q){const result=await baseConvertOne(job,mime,q);if(mime==="image/jxl")result.metadataRemoved=true;return result};
+
+const baseCollectSettings=collectSettings;
+collectSettings=function(){return{...baseCollectSettings(),jxlLossless:!!jxlLosslessInput?.checked}};
+const baseApplySettings=applySettings;
+applySettings=function(settings,markPreset=false){baseApplySettings(settings,markPreset);if(jxlLosslessInput){jxlLosslessInput.checked=!!settings?.jxlLossless;updateAdvancedUi()}};

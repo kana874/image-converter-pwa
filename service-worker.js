@@ -1,4 +1,4 @@
-const CACHE_NAME = "image-converter-pwa-v1.0.2";
+const CACHE_NAME = "image-converter-pwa-v1.2.0";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -10,10 +10,12 @@ const APP_SHELL = [
   "./js/app-part-04.txt",
   "./js/app-part-05.txt",
   "./js/app-part-06.txt",
+  "./js/jxl-extension.txt",
   "./manifest.json",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
-  "https://cdn.jsdelivr.net/npm/libheif-js@1.19.8/libheif-wasm/libheif-bundle.js"
+  "https://cdn.jsdelivr.net/npm/libheif-js@1.19.8/libheif-wasm/libheif-bundle.js",
+  "https://esm.sh/@jsquash/jxl@1.3.0"
 ];
 
 self.addEventListener("install", event => {
