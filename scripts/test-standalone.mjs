@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const standalone = path.join(root, 'dist', `image-converter-standalone-v${pkg.version}.html`);
 
@@ -14,14 +14,43 @@ try {
   const page = await browser.newPage();
   const externalRequests = [];
   const pageErrors = [];
+  const consoleErrors = [];
 
   page.on('request', request => {
     if (/^https?:/i.test(request.url())) externalRequests.push(request.url());
   });
-  page.on('pageerror', error => pageErrors.push(error.message));
+  page.on('pageerror', error => {
+    pageErrors.push(error.message);
+    console.error('PAGEERROR:', error.message);
+  });
+  page.on('console', message => {
+    if (message.type() === 'error' || message.type() === 'warning') {
+      const text = `${message.type().toUpperCase()}: ${message.text()}`;
+      consoleErrors.push(text);
+      console.error('BROWSER:', text);
+    }
+  });
 
   await page.goto(pathToFileURL(standalone).href, { waitUntil: 'load' });
-  await page.waitForFunction(() => !!document.querySelector('#outputFormat option[value="image/jxl"]'), null, { timeout: 15000 });
+  await page.waitForTimeout(1000);
+
+  const initial = await page.evaluate(() => ({
+    readyState: document.readyState,
+    hasOutputFormat: !!document.getElementById('outputFormat'),
+    optionValues: [...document.querySelectorAll('#outputFormat option')].map(option => option.value),
+    hasJxlCodec: !!globalThis.__JXL_STANDALONE__,
+    hasHeifModule: !!globalThis.libheif,
+    status: document.getElementById('status')?.textContent || '',
+    engineTitle: document.getElementById('engineTitle')?.textContent || '',
+    engineSub: document.getElementById('engineSub')?.textContent || ''
+  }));
+  console.log('INITIAL:', JSON.stringify(initial));
+
+  if (!initial.hasOutputFormat) throw new Error('Application DOM is missing #outputFormat.');
+  if (pageErrors.length) throw new Error(`Page errors before app startup: ${pageErrors.join(' | ')}`);
+  if (!initial.optionValues.includes('image/jxl')) {
+    throw new Error(`JXL output option was not installed. Diagnostics: ${JSON.stringify(initial)}; console=${consoleErrors.join(' | ')}`);
+  }
 
   const smoke = await page.evaluate(async () => {
     const codec = globalThis.__JXL_STANDALONE__;
