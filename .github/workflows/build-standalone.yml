@@ -1,0 +1,49 @@
+name: Build standalone HTML
+
+on:
+  pull_request:
+    paths:
+      - 'index.html'
+      - 'css/**'
+      - 'js/**'
+      - 'scripts/build-standalone.js'
+      - 'scripts/check-standalone.js'
+      - 'scripts/test-standalone.mjs'
+      - '.github/workflows/build-standalone.yml'
+      - 'package.json'
+  workflow_dispatch:
+
+jobs:
+  standalone:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install standalone build dependencies
+        run: npm install --no-save --ignore-scripts esbuild@0.25.9 @jsquash/jxl@1.3.0 libheif-js@1.19.8 playwright@1.55.0
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Build standalone HTML
+        run: node scripts/build-standalone.js
+
+      - name: Static standalone checks
+        run: node scripts/check-standalone.js
+
+      - name: File URL browser smoke test
+        run: node scripts/test-standalone.mjs
+
+      - name: Upload standalone HTML
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-converter-standalone
+          path: dist/image-converter-standalone-v*.html
+          if-no-files-found: error
