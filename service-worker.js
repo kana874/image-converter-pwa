@@ -15,7 +15,7 @@ const APP_SHELL = [
   "./icons/icon-192.png",
   "./icons/icon-512.png",
   "https://cdn.jsdelivr.net/npm/libheif-js@1.19.8/libheif-wasm/libheif-bundle.js",
-  "https://cdn.jsdelivr.net/npm/@jsquash/jxl@1.3.0/+esm"
+  "https://esm.sh/@jsquash/jxl@1.3.0"
 ];
 
 self.addEventListener("install", event => {
