@@ -57,13 +57,14 @@ function base64Bytes(text){
 
 let encoderPromise=null;
 let decoderPromise=null;
+const inlineLocateFile=path=>path;
 
 function encoder(){
-  if(!encoderPromise)encoderPromise=encFactory({noInitialRun:true,wasmBinary:base64Bytes(ENC_WASM_B64)});
+  if(!encoderPromise)encoderPromise=encFactory({noInitialRun:true,locateFile:inlineLocateFile,wasmBinary:base64Bytes(ENC_WASM_B64)});
   return encoderPromise;
 }
 function decoder(){
-  if(!decoderPromise)decoderPromise=decFactory({noInitialRun:true,wasmBinary:base64Bytes(DEC_WASM_B64)});
+  if(!decoderPromise)decoderPromise=decFactory({noInitialRun:true,locateFile:inlineLocateFile,wasmBinary:base64Bytes(DEC_WASM_B64)});
   return decoderPromise;
 }
 
