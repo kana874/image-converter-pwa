@@ -14,6 +14,15 @@ const read = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 const escapeScript = source => source.replace(/<\/script/gi, '<\\/script');
 const escapeStyle = source => source.replace(/<\/style/gi, '<\\/style');
 
+function assertJavaScript(name, source) {
+  try {
+    new Function(source);
+  } catch (error) {
+    error.message = `${name}: ${error.message}`;
+    throw error;
+  }
+}
+
 function findPackageRoot(packageName) {
   return path.dirname(require.resolve(`${packageName}/package.json`, { paths: [root] }));
 }
@@ -127,6 +136,10 @@ async function main() {
 
   // GitHub Pages / PWA bootstrap is not needed for file:// standalone execution.
   appSource = appSource.replace(/\n\n\/\/ GitHub Pages \/ PWA bootstrap[\s\S]*$/, '\n');
+
+  assertJavaScript('libheif bundle', libheifBundle);
+  assertJavaScript('JXL bundle', jxlBundle);
+  assertJavaScript('application source', appSource);
 
   const css = read('css/app.css');
   let html = read('index.html');
