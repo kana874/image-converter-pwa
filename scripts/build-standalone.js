@@ -99,6 +99,11 @@ function standaloneJxlExtension(source) {
   return out;
 }
 
+function makeBase64Bootstrap(globalName, source) {
+  const base64 = Buffer.from(source, 'utf8').toString('base64');
+  return `(() => {\n const ${globalName}=${JSON.stringify(base64)};\n const binary=atob(${globalName});\n const bytes=new Uint8Array(binary.length);\n for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);\n (0,eval)(new TextDecoder().decode(bytes));\n})();`;
+}
+
 async function main() {
   fs.mkdirSync(distDir, { recursive: true });
 
@@ -142,7 +147,12 @@ async function main() {
   assertJavaScript('application source', appSource);
   assertJavaScript('escaped libheif bundle', escapeScript(libheifBundle));
   assertJavaScript('escaped JXL bundle', escapeScript(jxlBundle));
-  assertJavaScript('escaped application source', escapeScript(appSource));
+
+  // Base64 keeps the application source opaque to the HTML parser. This is important
+  // because the app contains HTML fragments and regular expressions that are valid JS
+  // but can be reinterpreted while embedded directly inside a large script element.
+  const appBootstrap = makeBase64Bootstrap('APP_SOURCE_B64', appSource);
+  assertJavaScript('application bootstrap', appBootstrap);
 
   const css = read('css/app.css');
   let html = read('index.html');
@@ -155,7 +165,7 @@ async function main() {
 <!-- Standalone build: all runtime code and WASM codecs are embedded below. -->
 <script>${escapeScript(libheifBundle)}</script>
 <script>${escapeScript(jxlBundle)}</script>
-<script>${escapeScript(appSource)}</script>
+<script>${appBootstrap}</script>
 <script>
 (() => {
   const STANDALONE_VERSION=${JSON.stringify(pkg.version)};
