@@ -140,6 +140,9 @@ async function main() {
   assertJavaScript('libheif bundle', libheifBundle);
   assertJavaScript('JXL bundle', jxlBundle);
   assertJavaScript('application source', appSource);
+  assertJavaScript('escaped libheif bundle', escapeScript(libheifBundle));
+  assertJavaScript('escaped JXL bundle', escapeScript(jxlBundle));
+  assertJavaScript('escaped application source', escapeScript(appSource));
 
   const css = read('css/app.css');
   let html = read('index.html');
