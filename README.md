@@ -32,6 +32,35 @@ JXL出力はブラウザ標準のCanvasエンコーダーではなくWASMで生�
 
 現時点ではアニメーションJXL、HDR / 高ビット深度を保持したままの変換、JXL内EXIF等の完全保持は対象外です。Canvas / ImageDataを中間表現に使用するため、JXLロスレスは「変換後の画素データに対する可逆圧縮」を意味し、元ファイルのメタデータや特殊な符号化特性の完全保存を意味しません。
 
+## 単一HTML・完全オフライン版
+
+インターネットへ一度も接続できない端末へ持ち込む用途向けに、CSS・アプリ本体・HEIC用WASM・JXL用WASMを1個のHTMLファイルへ内蔵した版を生成できます。生成したHTMLはWebサーバーやService Workerを必要とせず、Windows上でファイルを直接ダブルクリックして `file://` から実行できます。
+
+単一HTML版では以下を外部へ取得しません。
+
+- CSS / JavaScript
+- `libheif-js` のHEIC / HEIFデコーダー
+- `@jsquash/jxl` / libjxlのJXLエンコーダー・デコーダー
+- アイコン、manifest、Service Worker
+
+生成手順:
+
+```bash
+npm install --no-save --ignore-scripts esbuild@0.25.9 @jsquash/jxl@1.3.0 libheif-js@1.19.8
+node scripts/build-standalone.js
+node scripts/check-standalone.js
+```
+
+出力先:
+
+```text
+dist/image-converter-standalone-v1.2.0.html
+```
+
+Pull RequestではGitHub Actionsが単一HTMLを自動生成し、Chromiumで `file://` から開いた状態でJXLのエンコード→デコードと外部通信が発生しないことを確認します。生成物は `image-converter-standalone` Artifactとして取得できます。
+
+単一HTML版はPWAとしてインストールするための版ではありません。USBメモリや社内ファイル共有等でHTMLファイルそのものを配布し、完全オフライン端末で直接開く用途を想定しています。
+
 ## GitHub Pages
 
 `Settings` → `Pages` → `Deploy from a branch` → `main` / `/ (root)` を指定してください。
@@ -51,6 +80,7 @@ https://kana874.github.io/image-converter-pwa/
 ## バージョン
 
 - PWA版: 1.2.0
+- 単一HTML版: PWA版の同一バージョンから生成
 - ベース: HEIC → JPG Offline v11
 
 ## AI共有knowledge
