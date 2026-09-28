@@ -1,4 +1,4 @@
-const CACHE_NAME = "image-converter-pwa-v1.2.0";
+const CACHE_NAME = "image-converter-pwa-v1.3.0";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -11,6 +11,7 @@ const APP_SHELL = [
   "./js/app-part-05.txt",
   "./js/app-part-06.txt",
   "./js/jxl-extension.txt",
+  "./js/split-merge-extension.txt",
   "./manifest.json",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
