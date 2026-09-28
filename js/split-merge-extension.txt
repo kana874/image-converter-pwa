@@ -234,7 +234,7 @@ async function imageToolsPreviewMerge(){
 }
 function imageToolsRenderMergeOutput(){
  const host=imageToolsUi.mergeOutput;if(!host)return;const item=mergeState.output;if(!item){host.innerHTML='<div class="empty">結合結果はここに表示されます。</div>';return}
- host.innerHTML='<div class="tool-output-card merge-result"><img src="'+esc(item.previewUrl)+'" alt="preview"><div class="output-info"><div class="file-name">'+esc(item.name)+'</div><div class="file-sub">'+item.width+"×"+item.height+"px / "+fmtBytes(item.blob.size)+" / "+esc(item.label)+'</div><div class="file-sub">展開時メモリ目安 "+imageToolsMemoryText(item.width,item.height)+'</div></div><div class="output-actions"><a class="download" href="'+esc(item.url)+'" download="'+esc(item.name)+'">保存</a></div></div>';
+ host.innerHTML='<div class="tool-output-card merge-result"><img src="'+esc(item.previewUrl)+'" alt="preview"><div class="output-info"><div class="file-name">'+esc(item.name)+'</div><div class="file-sub">'+item.width+"×"+item.height+"px / "+fmtBytes(item.blob.size)+" / "+esc(item.label)+'</div><div class="file-sub">展開時メモリ目安 '+imageToolsMemoryText(item.width,item.height)+'</div></div><div class="output-actions"><a class="download" href="'+esc(item.url)+'" download="'+esc(item.name)+'">保存</a></div></div>';
 }
 async function mergeImageFiles(){
  if(mergeState.running||mergeState.files.length<2)return;imageToolsInvalidateMerge();mergeState.running=true;imageToolsSetBusy(imageToolsUi.mergePanel,true);imageToolsUi.mergeProgress.textContent="画像を読み込んでいます…";let decoded=[];
