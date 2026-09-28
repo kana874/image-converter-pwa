@@ -73,7 +73,8 @@
 
   const parts = ['./js/app-part-01.txt', './js/app-part-02.txt', './js/app-part-03.txt', './js/app-part-04.txt', './js/app-part-05.txt', './js/app-part-06.txt'];
   const JXL_EXTENSION_PATH = './js/jxl-extension.txt';
-  const APP_VERSION = '1.2.0';
+  const IMAGE_TOOLS_EXTENSION_PATH = './js/split-merge-extension.txt';
+  const APP_VERSION = '1.3.0';
   (async () => {
     try {
       const chunks = [];
@@ -85,10 +86,13 @@
       const extensionResponse = await fetch(JXL_EXTENSION_PATH);
       if (!extensionResponse.ok) throw new Error(`${JXL_EXTENSION_PATH}: HTTP ${extensionResponse.status}`);
       const extension = await extensionResponse.text();
+      const imageToolsResponse = await fetch(IMAGE_TOOLS_EXTENSION_PATH);
+      if (!imageToolsResponse.ok) throw new Error(`${IMAGE_TOOLS_EXTENSION_PATH}: HTTP ${imageToolsResponse.status}`);
+      const imageToolsExtension = await imageToolsResponse.text();
       const startupMarker = '\nasync function startup(){';
       let source = chunks.join('');
-      if (!source.includes(startupMarker)) throw new Error('JXL extension insertion point was not found.');
-      source = source.replace(startupMarker, `\n${extension}\nasync function startup(){`);
+      if (!source.includes(startupMarker)) throw new Error('Extension insertion point was not found.');
+      source = source.replace(startupMarker, `\n${extension}\n${imageToolsExtension}\nasync function startup(){`);
       source = source.replace(/const APP_VERSION = ["'][^"']+["'];/, `const APP_VERSION = "${APP_VERSION}";`);
       (0, eval)(source);
     } catch (error) {
