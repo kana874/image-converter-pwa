@@ -136,9 +136,10 @@ async function main() {
   appSource = appSource.replace('const OFFLINE_EMBEDDED=false;', 'const OFFLINE_EMBEDDED=true;');
 
   const extension = standaloneJxlExtension(read('js/jxl-extension.txt'));
+  const imageToolsExtension = read('js/split-merge-extension.txt');
   const startupMarker = '\nasync function startup(){';
   if (!appSource.includes(startupMarker)) throw new Error('startup insertion point was not found.');
-  appSource = appSource.replace(startupMarker, `\n${extension}\nasync function startup(){`);
+  appSource = appSource.replace(startupMarker, `\n${extension}\n${imageToolsExtension}\nasync function startup(){`);
 
   // GitHub Pages / PWA bootstrap is not needed for file:// standalone execution.
   appSource = appSource.replace(/\n\n\/\/ GitHub Pages \/ PWA bootstrap[\s\S]*$/, '\n');

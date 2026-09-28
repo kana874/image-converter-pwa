@@ -1,0 +1,343 @@
+
+// Image split / merge tools
+const IMAGE_TOOLS_VERSION="1.3.0";
+const IMAGE_TOOLS_MAX_DIMENSION=32767;
+const IMAGE_TOOLS_MAX_PIXELS=120000000;
+const IMAGE_TOOLS_WARN_BYTES=256*1024*1024;
+
+const imageToolsUi={};
+const splitState={files:[],outputs:[],running:false,previewToken:0};
+const mergeState={files:[],output:null,running:false,previewToken:0};
+let imageToolsMode="convert";
+let imageToolsDragId=null;
+
+function imageToolsId(prefix){return prefix+Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
+function imageToolsPad(value){return String(value).padStart(2,"0")}
+function imageToolsExt(mime){return mime==="image/jxl"?"jxl":getOutputExt(mime)}
+function imageToolsLabel(mime){return mime==="image/jxl"?"JXL":getOutputLabel(mime)}
+function imageToolsQuality(input){return clamp(Math.round(Number(input&&input.value)||90),1,100)}
+function imageToolsFileKey(file){return [file.name,file.size,file.lastModified].join("|")}
+function imageToolsMemoryText(width,height){return fmtBytes(width*height*4)}
+function imageToolsFormatOptions(){return '<option value="image/jpeg">JPEG / JPG</option><option value="image/png">PNG</option><option value="image/webp">WebP</option><option value="image/jxl">JPEG XL / JXL</option>'}
+function imageToolsSafeColor(value,fallback){return /^#[0-9a-f]{6}$/i.test(String(value||""))?value:fallback}
+function imageToolsBackground(select,color,mime){
+ const mode=select&&select.value||"transparent";
+ if(mime==="image/jpeg"&&mode==="transparent")return"#ffffff";
+ if(mode==="white")return"#ffffff";
+ if(mode==="black")return"#000000";
+ if(mode==="custom")return imageToolsSafeColor(color&&color.value,"#ffffff");
+ return null;
+}
+function imageToolsCanvas(width,height,background){
+ const canvas=document.createElement("canvas");canvas.width=width;canvas.height=height;
+ const ctx=canvas.getContext("2d",{alpha:true});if(!ctx)throw new AppError("E_CANVAS","Canvasを初期化できません。");
+ if(background){ctx.fillStyle=background;ctx.fillRect(0,0,width,height)}
+ return{canvas,ctx};
+}
+function imageToolsCheckCanvas(width,height){
+ const pixels=width*height,bytes=pixels*4,warnings=[];
+ if(width>16384||height>16384)warnings.push("一辺が16,384pxを超えています。");
+ if(bytes>IMAGE_TOOLS_WARN_BYTES)warnings.push("展開時メモリの目安が"+imageToolsMemoryText(width,height)+"です。");
+ if(width>IMAGE_TOOLS_MAX_DIMENSION||height>IMAGE_TOOLS_MAX_DIMENSION||pixels>IMAGE_TOOLS_MAX_PIXELS){
+  throw new AppError("E_CANVAS_LIMIT","出力予定サイズ "+width+"×"+height+"px は大きすぎるため、安全のため処理を停止しました。分割数・結合方法・画像サイズを調整してください。");
+ }
+ return warnings;
+}
+async function imageToolsEncodeCanvas(canvas,mime,quality,lossless){
+ if(mime==="image/jxl"){
+  try{
+   const ctx=canvas.getContext("2d",{alpha:true,willReadFrequently:true});if(!ctx)throw new AppError("E_CANVAS","JXL出力用Canvasを読み取れません。");
+   const data=ctx.getImageData(0,0,canvas.width,canvas.height),mod=await getJxlModule(),q=lossless?100:clamp(quality,1,100);
+   const buffer=await mod.encode(data,{quality:q,lossless:!!lossless,effort:7});
+   return new Blob([buffer],{type:"image/jxl"});
+  }catch(error){if(error instanceof AppError)throw error;throw new AppError("E_JXL_ENCODE","JPEG XL画像の生成に失敗しました。",error)}
+ }
+ return canvasToBlob(canvas,mime,mime==="image/png"?undefined:quality/100);
+}
+async function imageToolsThumbnail(canvas){
+ const maxW=640,maxH=420,scale=Math.min(1,maxW/canvas.width,maxH/canvas.height),w=Math.max(1,Math.round(canvas.width*scale)),h=Math.max(1,Math.round(canvas.height*scale));
+ const p=imageToolsCanvas(w,h,"#ffffff");p.ctx.drawImage(canvas,0,0,canvas.width,canvas.height,0,0,w,h);
+ try{return URL.createObjectURL(await canvasToBlob(p.canvas,"image/jpeg",.82))}finally{p.canvas.width=p.canvas.height=1}
+}
+function imageToolsReleaseOutputItem(item){
+ if(!item)return;for(const key of ["url","previewUrl"]){const value=item[key];if(value)try{URL.revokeObjectURL(value)}catch(_){}}
+}
+function imageToolsReleaseSplitOutputs(){splitState.outputs.forEach(imageToolsReleaseOutputItem);splitState.outputs=[]}
+function imageToolsReleaseMergeOutput(){imageToolsReleaseOutputItem(mergeState.output);mergeState.output=null}
+function imageToolsDownload(blob,name){
+ const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url)},30000);
+}
+async function imageToolsDownloadMany(items){
+ for(const item of items){imageToolsDownload(item.blob,item.name);await new Promise(function(resolve){setTimeout(resolve,160)})}
+}
+function imageToolsSetBusy(panel,busy){
+ if(!panel)return;panel.querySelectorAll("button,input,select").forEach(function(el){if(el.dataset.allowBusy!=="true")el.disabled=!!busy});
+}
+function imageToolsAcceptedFiles(incoming){
+ const all=Array.from(incoming||[]);return{accepted:all.filter(isLikelyImage),rejected:all.filter(function(file){return!isLikelyImage(file)}).length};
+}
+function imageToolsAddFiles(state,incoming){
+ const result=imageToolsAcceptedFiles(incoming),existing=new Set(state.files.map(function(item){return imageToolsFileKey(item.file)}));
+ for(const file of result.accepted){const key=imageToolsFileKey(file);if(!existing.has(key)){state.files.push({id:imageToolsId("it"),file:file,rotation:0});existing.add(key)}}
+ return result.rejected;
+}
+function imageToolsRotate(state,id,delta){
+ const item=state.files.find(function(entry){return entry.id===id});if(!item)return;item.rotation=normalizeRotation((item.rotation||0)+delta);
+}
+function imageToolsMove(state,id,delta){
+ const index=state.files.findIndex(function(item){return item.id===id});if(index<0)return;const target=index+delta;if(target<0||target>=state.files.length)return;const temp=state.files[index];state.files[index]=state.files[target];state.files[target]=temp;
+}
+function imageToolsRenderFileList(kind){
+ const isMerge=kind==="merge",state=isMerge?mergeState:splitState,host=isMerge?imageToolsUi.mergeFiles:imageToolsUi.splitFiles;if(!host)return;
+ if(!state.files.length){host.innerHTML='<div class="empty">画像ファイルを追加してください。</div>';return}
+ host.innerHTML=state.files.map(function(item,index){
+  const ext=(item.file.name.split(".").pop()||"IMG").toUpperCase().slice(0,6);
+  return '<div class="tool-file-row" data-id="'+esc(item.id)+'" '+(isMerge?'draggable="true"':'')+'>'+
+   '<div class="file-icon">'+esc(ext)+'</div><div class="tool-file-main"><div class="file-name">'+esc(item.file.name)+'</div><div class="file-sub">'+fmtBytes(item.file.size)+' / 向き：'+esc(rotationLabel(item.rotation))+'</div>'+
+   '<div class="tool-mini-actions"><button type="button" data-action="left">↶ 左90°</button><button type="button" data-action="right">↷ 右90°</button><button type="button" data-action="half">180°</button><button type="button" data-action="reset" '+(normalizeRotation(item.rotation)===0?'disabled':'')+'>元に戻す</button>'+
+   (isMerge?'<button type="button" data-action="up" '+(index===0?'disabled':'')+'>↑</button><button type="button" data-action="down" '+(index===state.files.length-1?'disabled':'')+'>↓</button>':'')+'</div></div><button class="remove" type="button" data-action="remove" aria-label="削除">×</button></div>';
+ }).join("");
+ host.querySelectorAll(".tool-file-row").forEach(function(row){
+  row.addEventListener("click",function(event){
+   const button=event.target.closest("button[data-action]");if(!button)return;const id=row.dataset.id,action=button.dataset.action;
+   if(action==="left")imageToolsRotate(state,id,-90);else if(action==="right")imageToolsRotate(state,id,90);else if(action==="half")imageToolsRotate(state,id,180);else if(action==="reset"){const item=state.files.find(function(entry){return entry.id===id});if(item)item.rotation=0}else if(action==="up")imageToolsMove(state,id,-1);else if(action==="down")imageToolsMove(state,id,1);else if(action==="remove"){state.files=state.files.filter(function(entry){return entry.id!==id})}
+   if(isMerge){imageToolsInvalidateMerge();imageToolsRenderFileList("merge");imageToolsUi.mergeSummary.textContent=state.files.length+" ファイル";imageToolsMarkMergePreviewStale()}else{imageToolsInvalidateSplit();imageToolsRenderFileList("split");imageToolsUi.splitSummary.textContent=state.files.length+" ファイル";imageToolsRenderSplitPreview()}
+  });
+  if(isMerge){
+   row.addEventListener("dragstart",function(){imageToolsDragId=row.dataset.id;row.classList.add("dragging")});
+   row.addEventListener("dragend",function(){imageToolsDragId=null;row.classList.remove("dragging")});
+   row.addEventListener("dragover",function(event){event.preventDefault()});
+   row.addEventListener("drop",function(event){event.preventDefault();const targetId=row.dataset.id;if(!imageToolsDragId||imageToolsDragId===targetId)return;const from=state.files.findIndex(function(entry){return entry.id===imageToolsDragId}),to=state.files.findIndex(function(entry){return entry.id===targetId});if(from<0||to<0)return;const moved=state.files.splice(from,1)[0];state.files.splice(to,0,moved);imageToolsInvalidateMerge();imageToolsRenderFileList("merge");imageToolsMarkMergePreviewStale()});
+  }
+ });
+}
+async function imageToolsDecodeEntries(entries,onProgress){
+ const decoded=[];
+ try{
+  for(let index=0;index<entries.length;index++){
+   if(onProgress)onProgress(index,entries.length,entries[index]);
+   const source=await decodeToCanvas(entries[index].file),oriented=rotateDecodedCanvas(source.canvas,entries[index].rotation);
+   decoded.push({entry:entries[index],canvas:oriented.canvas,width:oriented.width,height:oriented.height,owned:oriented.owned,sourceCanvas:source.canvas,sourceWidth:source.width,sourceHeight:source.height});
+  }
+  return decoded;
+ }catch(error){imageToolsReleaseDecoded(decoded);throw error}
+}
+function imageToolsReleaseDecoded(items){
+ for(const item of items||[]){try{if(item.owned&&item.canvas){item.canvas.width=item.canvas.height=1}}catch(_){}try{if(item.sourceCanvas){item.sourceCanvas.width=item.sourceCanvas.height=1}}catch(_){}}
+}
+
+function imageToolsInvalidateSplit(){imageToolsReleaseSplitOutputs();imageToolsRenderSplitOutputs()}
+function imageToolsInvalidateMerge(){imageToolsReleaseMergeOutput();imageToolsRenderMergeOutput()}
+function imageToolsMarkMergePreviewStale(){
+ if(imageToolsUi.mergePreviewInfo)imageToolsUi.mergePreviewInfo.textContent=mergeState.files.length?"設定または並び順が変わりました。「プレビュー更新」で確認してください。":"画像を追加してください。";
+}
+async function imageToolsRenderSplitPreview(){
+ const token=++splitState.previewToken,canvas=imageToolsUi.splitPreview,info=imageToolsUi.splitPreviewInfo;if(!canvas||!info)return;
+ if(!splitState.files.length){canvas.width=1;canvas.height=1;info.textContent="画像を追加すると分割位置を確認できます。";return}
+ info.textContent="プレビュー生成中…";
+ let decoded=null,oriented=null;
+ try{
+  decoded=await decodeToCanvas(splitState.files[0].file);if(token!==splitState.previewToken)return;oriented=rotateDecodedCanvas(decoded.canvas,splitState.files[0].rotation);
+  const rows=clamp(Math.floor(Number(imageToolsUi.splitRows.value)||1),1,12),cols=clamp(Math.floor(Number(imageToolsUi.splitCols.value)||1),1,12),scale=Math.min(1,820/oriented.width,460/oriented.height),w=Math.max(1,Math.round(oriented.width*scale)),h=Math.max(1,Math.round(oriented.height*scale));
+  canvas.width=w;canvas.height=h;const ctx=canvas.getContext("2d");ctx.clearRect(0,0,w,h);ctx.drawImage(oriented.canvas,0,0,oriented.width,oriented.height,0,0,w,h);
+  ctx.save();ctx.strokeStyle="rgba(255,80,80,.95)";ctx.lineWidth=Math.max(1,Math.round(Math.min(w,h)/300));
+  for(let c=1;c<cols;c++){const x=Math.round(c*w/cols)+.5;ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke()}
+  for(let r=1;r<rows;r++){const y=Math.round(r*h/rows)+.5;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}ctx.restore();
+  const minW=Math.floor(oriented.width/cols),maxW=Math.ceil(oriented.width/cols),minH=Math.floor(oriented.height/rows),maxH=Math.ceil(oriented.height/rows);
+  info.textContent=oriented.width+"×"+oriented.height+"px → "+rows+"行 × "+cols+"列 / 1枚あたり約 "+minW+"～"+maxW+" × "+minH+"～"+maxH+"px";
+ }catch(error){if(token===splitState.previewToken){info.textContent=normalizeError(error,"E_PREVIEW","プレビューを生成できませんでした。").message}}
+ finally{try{if(oriented&&oriented.owned){oriented.canvas.width=oriented.canvas.height=1}}catch(_){}try{if(decoded&&decoded.canvas){decoded.canvas.width=decoded.canvas.height=1}}catch(_){}}
+}
+function imageToolsRenderSplitOutputs(){
+ const host=imageToolsUi.splitOutputs;if(!host)return;
+ imageToolsUi.splitDownloadAll.disabled=splitState.running||!splitState.outputs.length;imageToolsUi.splitZip.disabled=splitState.running||!splitState.outputs.length;
+ if(!splitState.outputs.length){host.innerHTML='<div class="empty">分割結果はここに表示されます。</div>';return}
+ host.innerHTML=splitState.outputs.map(function(item){
+  return '<div class="tool-output-card"><img loading="lazy" src="'+esc(item.previewUrl)+'" alt="preview"><div class="output-info"><div class="file-name">'+esc(item.name)+'</div><div class="file-sub">'+item.width+"×"+item.height+"px / "+fmtBytes(item.blob.size)+" / "+esc(item.label)+'</div></div><div class="output-actions"><a class="download" href="'+esc(item.url)+'" download="'+esc(item.name)+'">保存</a></div></div>';
+ }).join("");
+}
+async function splitImageFiles(){
+ if(splitState.running||!splitState.files.length)return;
+ imageToolsInvalidateSplit();splitState.running=true;imageToolsSetBusy(imageToolsUi.splitPanel,true);imageToolsUi.splitProgress.textContent="分割を開始します…";
+ const rows=clamp(Math.floor(Number(imageToolsUi.splitRows.value)||1),1,12),cols=clamp(Math.floor(Number(imageToolsUi.splitCols.value)||1),1,12),mime=imageToolsUi.splitFormat.value,quality=imageToolsQuality(imageToolsUi.splitQuality),lossless=!!imageToolsUi.splitLossless.checked,bg=imageToolsBackground(imageToolsUi.splitBackground,imageToolsUi.splitBackgroundColor,mime),used=new Set();
+ let done=0;const total=splitState.files.length*rows*cols;
+ try{
+  for(const entry of splitState.files){
+   const decoded=await decodeToCanvas(entry.file),oriented=rotateDecodedCanvas(decoded.canvas,entry.rotation);
+   try{
+    for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){
+     const x0=Math.round(c*oriented.width/cols),x1=Math.round((c+1)*oriented.width/cols),y0=Math.round(r*oriented.height/rows),y1=Math.round((r+1)*oriented.height/rows),w=Math.max(1,x1-x0),h=Math.max(1,y1-y0);
+     imageToolsCheckCanvas(w,h);const surface=imageToolsCanvas(w,h,bg);surface.ctx.drawImage(oriented.canvas,x0,y0,w,h,0,0,w,h);
+     try{
+      const blob=await imageToolsEncodeCanvas(surface.canvas,mime,quality,lossless),previewUrl=await imageToolsThumbnail(surface.canvas),ext=imageToolsExt(mime),base=sanitizeFilename(safeBaseName(entry.file.name)),raw=ensureExt(base+"_part_r"+imageToolsPad(r+1)+"_c"+imageToolsPad(c+1),ext),name=uniqueName(raw,used),url=URL.createObjectURL(blob);
+      splitState.outputs.push({name:name,blob:blob,url:url,previewUrl:previewUrl,width:w,height:h,label:imageToolsLabel(mime)});
+     }finally{surface.canvas.width=surface.canvas.height=1}
+     done++;imageToolsUi.splitProgress.textContent="分割中 "+done+" / "+total+"："+entry.file.name;imageToolsRenderSplitOutputs();await new Promise(function(resolve){setTimeout(resolve,0)});
+    }
+   }finally{if(oriented.owned){oriented.canvas.width=oriented.canvas.height=1}decoded.canvas.width=decoded.canvas.height=1}
+  }
+  imageToolsUi.splitProgress.textContent="完了："+splitState.outputs.length+"枚を生成しました。";setStatus("画像分割が完了しました。","success");
+ }catch(error){const er=normalizeError(error,"E_SPLIT","画像分割に失敗しました。");console.error(er);imageToolsUi.splitProgress.textContent="失敗："+er.message;setStatus(er.message,"error")}
+ finally{splitState.running=false;imageToolsSetBusy(imageToolsUi.splitPanel,false);imageToolsSyncFormatUi();imageToolsRenderSplitOutputs()}
+}
+async function imageToolsDownloadSplitZip(){
+ if(!splitState.outputs.length)return;try{const blob=await createStoreZip(splitState.outputs.map(function(item){return{name:item.name,blob:item.blob}}));imageToolsDownload(blob,"画像分割_"+dateStamp()+".zip");setStatus(splitState.outputs.length+"枚をZIPにまとめました。","success")}catch(error){setStatus(normalizeError(error,"E_ZIP","ZIP作成に失敗しました。").message,"error")}
+}
+
+function imageToolsFitSize(width,height,mode,reference,noUpscale){
+ let scale=1;
+ if(mode==="height")scale=reference/height;else if(mode==="width")scale=reference/width;else if(mode&&mode.width&&mode.height)scale=Math.min(mode.width/width,mode.height/height);
+ if(noUpscale)scale=Math.min(1,scale);return{width:Math.max(1,Math.round(width*scale)),height:Math.max(1,Math.round(height*scale))};
+}
+function imageToolsMergeLayout(items){
+ const direction=imageToolsUi.mergeDirection.value,fit=imageToolsUi.mergeFit.value,noUpscale=imageToolsUi.mergeNoUpscale.checked,gap=Math.max(0,Math.floor(Number(imageToolsUi.mergeGap.value)||0)),padding=Math.max(0,Math.floor(Number(imageToolsUi.mergePadding.value)||0)),gridCols=clamp(Math.floor(Number(imageToolsUi.mergeGridCols.value)||2),1,12);
+ let sizes=items.map(function(item){return{width:item.width,height:item.height}});
+ if(fit==="auto"&&items.length){
+  if(direction==="horizontal")sizes=items.map(function(item){return imageToolsFitSize(item.width,item.height,"height",items[0].height,noUpscale)});
+  else if(direction==="vertical")sizes=items.map(function(item){return imageToolsFitSize(item.width,item.height,"width",items[0].width,noUpscale)});
+ }else if(fit==="contain"){
+  const box={width:Math.max(1,Math.floor(Number(imageToolsUi.mergeBoxWidth.value)||1200)),height:Math.max(1,Math.floor(Number(imageToolsUi.mergeBoxHeight.value)||1200))};
+  sizes=items.map(function(item){return imageToolsFitSize(item.width,item.height,box,0,noUpscale)});
+ }
+ if(direction==="horizontal"){
+  const innerH=Math.max.apply(null,sizes.map(function(size){return size.height})),innerW=sizes.reduce(function(sum,size){return sum+size.width},0)+gap*Math.max(0,sizes.length-1);let x=padding;
+  const placed=sizes.map(function(size,index){const item={source:items[index],x:x,y:padding+Math.floor((innerH-size.height)/2),width:size.width,height:size.height};x+=size.width+gap;return item});
+  return{width:innerW+padding*2,height:innerH+padding*2,items:placed,gap:gap,padding:padding,direction:direction};
+ }
+ if(direction==="vertical"){
+  const innerW=Math.max.apply(null,sizes.map(function(size){return size.width})),innerH=sizes.reduce(function(sum,size){return sum+size.height},0)+gap*Math.max(0,sizes.length-1);let y=padding;
+  const placed=sizes.map(function(size,index){const item={source:items[index],x:padding+Math.floor((innerW-size.width)/2),y:y,width:size.width,height:size.height};y+=size.height+gap;return item});
+  return{width:innerW+padding*2,height:innerH+padding*2,items:placed,gap:gap,padding:padding,direction:direction};
+ }
+ const cols=Math.min(gridCols,items.length),rows=Math.ceil(items.length/cols);let cellW,cellH;
+ if(fit==="contain"){cellW=Math.max(1,Math.floor(Number(imageToolsUi.mergeBoxWidth.value)||1200));cellH=Math.max(1,Math.floor(Number(imageToolsUi.mergeBoxHeight.value)||1200))}
+ else if(fit==="auto"){cellW=items[0].width;cellH=items[0].height;sizes=items.map(function(item){return imageToolsFitSize(item.width,item.height,{width:cellW,height:cellH},0,noUpscale)})}
+ else{cellW=Math.max.apply(null,items.map(function(item){return item.width}));cellH=Math.max.apply(null,items.map(function(item){return item.height}))}
+ const placed=sizes.map(function(size,index){const col=index%cols,row=Math.floor(index/cols),cellX=padding+col*(cellW+gap),cellY=padding+row*(cellH+gap);return{source:items[index],x:cellX+Math.floor((cellW-size.width)/2),y:cellY+Math.floor((cellH-size.height)/2),width:size.width,height:size.height}});
+ return{width:padding*2+cols*cellW+gap*Math.max(0,cols-1),height:padding*2+rows*cellH+gap*Math.max(0,rows-1),items:placed,gap:gap,padding:padding,direction:direction,cols:cols,rows:rows,cellW:cellW,cellH:cellH};
+}
+function imageToolsPaintLayout(canvas,layout,background,scale){
+ const ctx=canvas.getContext("2d",{alpha:true});if(!ctx)throw new AppError("E_CANVAS","結合Canvasを初期化できません。");ctx.clearRect(0,0,canvas.width,canvas.height);if(background){ctx.fillStyle=background;ctx.fillRect(0,0,canvas.width,canvas.height)}
+ const s=scale||1;for(const item of layout.items){ctx.drawImage(item.source.canvas,0,0,item.source.width,item.source.height,Math.round(item.x*s),Math.round(item.y*s),Math.max(1,Math.round(item.width*s)),Math.max(1,Math.round(item.height*s)))}
+}
+async function imageToolsPreviewMerge(){
+ const token=++mergeState.previewToken;if(!mergeState.files.length){imageToolsMarkMergePreviewStale();return}
+ imageToolsUi.mergePreviewInfo.textContent="プレビュー生成中…";imageToolsUi.mergePreviewBtn.disabled=true;let decoded=[];
+ try{
+  decoded=await imageToolsDecodeEntries(mergeState.files,function(index,total,item){if(token===mergeState.previewToken)imageToolsUi.mergePreviewInfo.textContent="読み込み中 "+(index+1)+" / "+total+"："+item.file.name});
+  if(token!==mergeState.previewToken)return;const layout=imageToolsMergeLayout(decoded),warnings=[];if(layout.width>16384||layout.height>16384)warnings.push("一辺が16,384px超");if(layout.width*layout.height*4>IMAGE_TOOLS_WARN_BYTES)warnings.push("展開時 "+imageToolsMemoryText(layout.width,layout.height));
+  const scale=Math.min(1,880/layout.width,500/layout.height),canvas=imageToolsUi.mergePreview;canvas.width=Math.max(1,Math.round(layout.width*scale));canvas.height=Math.max(1,Math.round(layout.height*scale));
+  const bg=imageToolsBackground(imageToolsUi.mergeBackground,imageToolsUi.mergeBackgroundColor,imageToolsUi.mergeFormat.value);imageToolsPaintLayout(canvas,layout,bg,scale);
+  imageToolsUi.mergePreviewInfo.textContent="出力予定 "+layout.width+"×"+layout.height+"px / 展開時メモリ目安 "+imageToolsMemoryText(layout.width,layout.height)+(warnings.length?" / 注意："+warnings.join("、"):"");
+ }catch(error){if(token===mergeState.previewToken)imageToolsUi.mergePreviewInfo.textContent=normalizeError(error,"E_PREVIEW","結合プレビューを生成できませんでした。").message}
+ finally{imageToolsReleaseDecoded(decoded);imageToolsUi.mergePreviewBtn.disabled=false}
+}
+function imageToolsRenderMergeOutput(){
+ const host=imageToolsUi.mergeOutput;if(!host)return;const item=mergeState.output;if(!item){host.innerHTML='<div class="empty">結合結果はここに表示されます。</div>';return}
+ host.innerHTML='<div class="tool-output-card merge-result"><img src="'+esc(item.previewUrl)+'" alt="preview"><div class="output-info"><div class="file-name">'+esc(item.name)+'</div><div class="file-sub">'+item.width+"×"+item.height+"px / "+fmtBytes(item.blob.size)+" / "+esc(item.label)+'</div><div class="file-sub">展開時メモリ目安 '+imageToolsMemoryText(item.width,item.height)+'</div></div><div class="output-actions"><a class="download" href="'+esc(item.url)+'" download="'+esc(item.name)+'">保存</a></div></div>';
+}
+async function mergeImageFiles(){
+ if(mergeState.running||mergeState.files.length<2)return;imageToolsInvalidateMerge();mergeState.running=true;imageToolsSetBusy(imageToolsUi.mergePanel,true);imageToolsUi.mergeProgress.textContent="画像を読み込んでいます…";let decoded=[];
+ try{
+  decoded=await imageToolsDecodeEntries(mergeState.files,function(index,total,item){imageToolsUi.mergeProgress.textContent="読み込み中 "+(index+1)+" / "+total+"："+item.file.name});
+  const layout=imageToolsMergeLayout(decoded),warnings=imageToolsCheckCanvas(layout.width,layout.height),mime=imageToolsUi.mergeFormat.value,bg=imageToolsBackground(imageToolsUi.mergeBackground,imageToolsUi.mergeBackgroundColor,mime),surface=imageToolsCanvas(layout.width,layout.height,bg);
+  try{
+   imageToolsUi.mergeProgress.textContent="結合Canvasを生成しています…";imageToolsPaintLayout(surface.canvas,layout,bg,1);
+   const quality=imageToolsQuality(imageToolsUi.mergeQuality),lossless=!!imageToolsUi.mergeLossless.checked;imageToolsUi.mergeProgress.textContent=imageToolsLabel(mime)+"へエンコードしています…";
+   const blob=await imageToolsEncodeCanvas(surface.canvas,mime,quality,lossless),previewUrl=await imageToolsThumbnail(surface.canvas),ext=imageToolsExt(mime),name=ensureExt(sanitizeFilename(imageToolsUi.mergeName.value.trim()||"結合画像"),ext),url=URL.createObjectURL(blob);
+   mergeState.output={name:name,blob:blob,url:url,previewUrl:previewUrl,width:layout.width,height:layout.height,label:imageToolsLabel(mime)};
+   imageToolsRenderMergeOutput();imageToolsUi.mergeProgress.textContent="完了："+name+(warnings.length?" / 注意："+warnings.join("、"):"");setStatus("画像結合が完了しました。","success");
+  }finally{surface.canvas.width=surface.canvas.height=1}
+ }catch(error){const er=normalizeError(error,"E_MERGE","画像結合に失敗しました。");console.error(er);imageToolsUi.mergeProgress.textContent="失敗："+er.message;setStatus(er.message,"error")}
+ finally{imageToolsReleaseDecoded(decoded);mergeState.running=false;imageToolsSetBusy(imageToolsUi.mergePanel,false);imageToolsSyncFormatUi()}
+}
+function imageToolsSyncFormatUi(){
+ if(!imageToolsUi.splitFormat)return;
+ const splitMime=imageToolsUi.splitFormat.value,mergeMime=imageToolsUi.mergeFormat.value;
+ imageToolsUi.splitQuality.disabled=splitState.running||splitMime==="image/png"||(splitMime==="image/jxl"&&imageToolsUi.splitLossless.checked);
+ imageToolsUi.mergeQuality.disabled=mergeState.running||mergeMime==="image/png"||(mergeMime==="image/jxl"&&imageToolsUi.mergeLossless.checked);
+ imageToolsUi.splitLosslessWrap.classList.toggle("hidden-field",splitMime!=="image/jxl");imageToolsUi.mergeLosslessWrap.classList.toggle("hidden-field",mergeMime!=="image/jxl");
+ imageToolsUi.splitBackgroundColorWrap.classList.toggle("hidden-field",imageToolsUi.splitBackground.value!=="custom");imageToolsUi.mergeBackgroundColorWrap.classList.toggle("hidden-field",imageToolsUi.mergeBackground.value!=="custom");
+ imageToolsUi.mergeGridWrap.classList.toggle("hidden-field",imageToolsUi.mergeDirection.value!=="grid");imageToolsUi.mergeBoxWrap.classList.toggle("hidden-field",imageToolsUi.mergeFit.value!=="contain");
+ const splitWebp=imageToolsUi.splitFormat.querySelector('option[value="image/webp"]'),mergeWebp=imageToolsUi.mergeFormat.querySelector('option[value="image/webp"]');if(splitWebp)splitWebp.disabled=!capabilities.webp;if(mergeWebp)mergeWebp.disabled=!capabilities.webp;
+}
+function imageToolsSetMode(mode){
+ if(runtime.running||splitState.running||mergeState.running)return;imageToolsMode=["convert","split","merge"].includes(mode)?mode:"convert";
+ imageToolsUi.tabs.querySelectorAll("button[data-mode]").forEach(function(button){const active=button.dataset.mode===imageToolsMode;button.classList.toggle("active",active);button.setAttribute("aria-selected",active?"true":"false")});
+ imageToolsUi.convertNodes.forEach(function(node){if(node)node.classList.toggle("tool-mode-hidden",imageToolsMode!=="convert")});
+ imageToolsUi.splitPanel.classList.toggle("hidden",imageToolsMode!=="split");imageToolsUi.mergePanel.classList.toggle("hidden",imageToolsMode!=="merge");
+ if(imageToolsMode==="split")imageToolsRenderSplitPreview();if(imageToolsMode==="merge")imageToolsMarkMergePreviewStale();
+}
+function imageToolsBindDrop(zone,input,onFiles){
+ zone.addEventListener("click",function(){if(!splitState.running&&!mergeState.running)input.click()});zone.addEventListener("keydown",function(event){if(event.key==="Enter"||event.key===" "){event.preventDefault();input.click()}});
+ input.addEventListener("change",function(){onFiles(input.files);input.value=""});
+ ["dragenter","dragover"].forEach(function(type){zone.addEventListener(type,function(event){event.preventDefault();zone.classList.add("drag")})});
+ ["dragleave","drop"].forEach(function(type){zone.addEventListener(type,function(event){event.preventDefault();zone.classList.remove("drag")})});
+ zone.addEventListener("drop",function(event){onFiles(event.dataTransfer.files)});
+}
+function imageToolsInstallUi(){
+ const anchor=els.fileInput,tabs=document.createElement("div");tabs.className="mode-tabs";tabs.id="imageToolTabs";tabs.setAttribute("role","tablist");tabs.innerHTML='<button type="button" class="active" data-mode="convert" role="tab" aria-selected="true">変換</button><button type="button" data-mode="split" role="tab" aria-selected="false">分割</button><button type="button" data-mode="merge" role="tab" aria-selected="false">結合</button>';anchor.parentNode.insertBefore(tabs,anchor);imageToolsUi.tabs=tabs;
+ const splitPanel=document.createElement("section");splitPanel.id="splitModePanel";splitPanel.className="tool-mode-panel hidden";splitPanel.innerHTML=[
+  '<input id="splitFileInput" type="file" accept=".heic,.heif,.jpg,.jpeg,.png,.webp,.bmp,.gif,.svg,.avif,.tif,.tiff,.jxl,image/*,image/jxl" multiple hidden>',
+  '<div id="splitDropZone" class="drop tool-drop" tabindex="0" role="button"><div><div class="plus">＋</div><strong>分割する画像を追加</strong><span>複数画像に同じ分割設定を適用できます</span></div></div>',
+  '<div class="tool-card"><div class="tool-card-title">分割設定</div><div class="tool-grid">',
+  '<div class="field"><label for="splitRows">行</label><input id="splitRows" type="number" min="1" max="12" value="2" inputmode="numeric"></div>',
+  '<div class="field"><label for="splitCols">列</label><input id="splitCols" type="number" min="1" max="12" value="2" inputmode="numeric"></div>',
+  '<div class="field"><label for="splitFormat">出力形式</label><select id="splitFormat">'+imageToolsFormatOptions()+'</select></div>',
+  '<div class="field"><label for="splitQuality">品質</label><input id="splitQuality" type="number" min="1" max="100" value="90" inputmode="numeric"></div>',
+  '<div class="field"><label for="splitBackground">背景</label><select id="splitBackground"><option value="transparent">透明（JPEGは白）</option><option value="white">白</option><option value="black">黒</option><option value="custom">指定色</option></select></div>',
+  '<div class="field hidden-field" id="splitBackgroundColorWrap"><label for="splitBackgroundColor">背景色</label><input id="splitBackgroundColor" type="color" value="#ffffff"></div>',
+  '<div class="field wide hidden-field" id="splitLosslessWrap"><label class="checkline"><input id="splitLossless" type="checkbox"> JXLをロスレス（画素可逆）で保存</label></div>',
+  '</div><div class="smallnote">端数ピクセルは外周側の分割画像へ自動配分し、元画像の全画素を欠落なく分割します。</div></div>',
+  '<div class="tool-card"><div class="tool-card-title">分割プレビュー</div><div class="tool-preview-wrap"><canvas id="splitPreview"></canvas></div><div class="smallnote" id="splitPreviewInfo">画像を追加すると分割位置を確認できます。</div></div>',
+  '<div class="bar"><h2>分割対象</h2><div class="bar-actions"><span id="splitSummary">0 ファイル</span></div></div><div id="splitFiles" class="tool-file-list"></div>',
+  '<div class="tool-actions"><button id="splitRunBtn" class="primary" type="button">分割する</button><button id="splitDownloadAll" type="button" disabled>すべて保存</button><button id="splitZip" class="good" type="button" disabled>ZIPでまとめて保存</button><button id="splitClear" type="button">クリア</button></div>',
+  '<div id="splitProgress" class="tool-progress"></div><div class="bar"><h2>分割結果</h2></div><div id="splitOutputs" class="tool-output-grid"></div>'
+ ].join("");els.status.parentNode.insertBefore(splitPanel,els.status);imageToolsUi.splitPanel=splitPanel;
+ const mergePanel=document.createElement("section");mergePanel.id="mergeModePanel";mergePanel.className="tool-mode-panel hidden";mergePanel.innerHTML=[
+  '<input id="mergeFileInput" type="file" accept=".heic,.heif,.jpg,.jpeg,.png,.webp,.bmp,.gif,.svg,.avif,.tif,.tiff,.jxl,image/*,image/jxl" multiple hidden>',
+  '<div id="mergeDropZone" class="drop tool-drop" tabindex="0" role="button"><div><div class="plus">＋</div><strong>結合する画像を追加</strong><span>ドラッグ、↑↓ボタンで並び順を変更できます</span></div></div>',
+  '<div class="bar"><h2>結合対象</h2><div class="bar-actions"><span id="mergeSummary">0 ファイル</span></div></div><div id="mergeFiles" class="tool-file-list"></div>',
+  '<div class="tool-card"><div class="tool-card-title">結合設定</div><div class="tool-grid">',
+  '<div class="field"><label for="mergeDirection">結合方向</label><select id="mergeDirection"><option value="horizontal">横に結合</option><option value="vertical">縦に結合</option><option value="grid">グリッド</option></select></div>',
+  '<div class="field hidden-field" id="mergeGridWrap"><label for="mergeGridCols">グリッド列数</label><input id="mergeGridCols" type="number" min="1" max="12" value="3" inputmode="numeric"></div>',
+  '<div class="field"><label for="mergeFit">サイズ調整</label><select id="mergeFit"><option value="auto">自動（先頭画像を基準）</option><option value="original">元サイズを維持</option><option value="contain">指定枠内に収める</option></select></div>',
+  '<div class="field wide hidden-field" id="mergeBoxWrap"><div class="tool-inline-fields"><div class="field"><label for="mergeBoxWidth">枠の幅（px）</label><input id="mergeBoxWidth" type="number" min="1" value="1200"></div><div class="field"><label for="mergeBoxHeight">枠の高さ（px）</label><input id="mergeBoxHeight" type="number" min="1" value="1200"></div></div></div>',
+  '<div class="field wide"><label class="checkline"><input id="mergeNoUpscale" type="checkbox" checked> 元画像より拡大しない</label></div>',
+  '<div class="field"><label for="mergeGap">画像間隔（px）</label><input id="mergeGap" type="number" min="0" value="0"></div>',
+  '<div class="field"><label for="mergePadding">外側余白（px）</label><input id="mergePadding" type="number" min="0" value="0"></div>',
+  '<div class="field"><label for="mergeBackground">背景</label><select id="mergeBackground"><option value="transparent">透明（JPEGは白）</option><option value="white">白</option><option value="black">黒</option><option value="custom">指定色</option></select></div>',
+  '<div class="field hidden-field" id="mergeBackgroundColorWrap"><label for="mergeBackgroundColor">背景色</label><input id="mergeBackgroundColor" type="color" value="#ffffff"></div>',
+  '<div class="field"><label for="mergeFormat">出力形式</label><select id="mergeFormat">'+imageToolsFormatOptions()+'</select></div>',
+  '<div class="field"><label for="mergeQuality">品質</label><input id="mergeQuality" type="number" min="1" max="100" value="90" inputmode="numeric"></div>',
+  '<div class="field wide hidden-field" id="mergeLosslessWrap"><label class="checkline"><input id="mergeLossless" type="checkbox"> JXLをロスレス（画素可逆）で保存</label></div>',
+  '<div class="field"><label for="mergeName">保存名</label><input id="mergeName" type="text" value="結合画像"></div>',
+  '</div><div class="smallnote">横結合では高さ、縦結合では幅を先頭画像に合わせます。グリッドでは先頭画像サイズをセル基準にします。</div></div>',
+  '<div class="tool-card"><div class="tool-card-title">結合プレビュー</div><div class="tool-preview-wrap checker"><canvas id="mergePreview"></canvas></div><div class="tool-actions compact"><button id="mergePreviewBtn" type="button">プレビュー更新</button></div><div class="smallnote" id="mergePreviewInfo">画像を追加してください。</div></div>',
+  '<div class="tool-actions"><button id="mergeRunBtn" class="primary" type="button">結合する</button><button id="mergeClear" type="button">クリア</button></div><div id="mergeProgress" class="tool-progress"></div>',
+  '<div class="bar"><h2>結合結果</h2></div><div id="mergeOutput" class="tool-output-grid"></div>'
+ ].join("");els.status.parentNode.insertBefore(mergePanel,els.status);imageToolsUi.mergePanel=mergePanel;
+
+ const byId=function(id){return document.getElementById(id)};
+ Object.assign(imageToolsUi,{
+  splitInput:byId("splitFileInput"),splitDrop:byId("splitDropZone"),splitRows:byId("splitRows"),splitCols:byId("splitCols"),splitFormat:byId("splitFormat"),splitQuality:byId("splitQuality"),splitBackground:byId("splitBackground"),splitBackgroundColor:byId("splitBackgroundColor"),splitBackgroundColorWrap:byId("splitBackgroundColorWrap"),splitLossless:byId("splitLossless"),splitLosslessWrap:byId("splitLosslessWrap"),splitPreview:byId("splitPreview"),splitPreviewInfo:byId("splitPreviewInfo"),splitFiles:byId("splitFiles"),splitSummary:byId("splitSummary"),splitRun:byId("splitRunBtn"),splitDownloadAll:byId("splitDownloadAll"),splitZip:byId("splitZip"),splitClear:byId("splitClear"),splitProgress:byId("splitProgress"),splitOutputs:byId("splitOutputs"),
+  mergeInput:byId("mergeFileInput"),mergeDrop:byId("mergeDropZone"),mergeFiles:byId("mergeFiles"),mergeSummary:byId("mergeSummary"),mergeDirection:byId("mergeDirection"),mergeGridCols:byId("mergeGridCols"),mergeGridWrap:byId("mergeGridWrap"),mergeFit:byId("mergeFit"),mergeBoxWrap:byId("mergeBoxWrap"),mergeBoxWidth:byId("mergeBoxWidth"),mergeBoxHeight:byId("mergeBoxHeight"),mergeNoUpscale:byId("mergeNoUpscale"),mergeGap:byId("mergeGap"),mergePadding:byId("mergePadding"),mergeBackground:byId("mergeBackground"),mergeBackgroundColor:byId("mergeBackgroundColor"),mergeBackgroundColorWrap:byId("mergeBackgroundColorWrap"),mergeFormat:byId("mergeFormat"),mergeQuality:byId("mergeQuality"),mergeLossless:byId("mergeLossless"),mergeLosslessWrap:byId("mergeLosslessWrap"),mergeName:byId("mergeName"),mergePreview:byId("mergePreview"),mergePreviewBtn:byId("mergePreviewBtn"),mergePreviewInfo:byId("mergePreviewInfo"),mergeRun:byId("mergeRunBtn"),mergeClear:byId("mergeClear"),mergeProgress:byId("mergeProgress"),mergeOutput:byId("mergeOutput")
+ });
+ imageToolsUi.convertNodes=[els.dropZone,document.querySelector(".quick-grid"),document.querySelector(".action-row"),els.progressPanel,document.getElementById("advancedSettings"),els.list,els.outputList].concat(Array.from(document.querySelectorAll("main.panel > .bar")));
+ tabs.addEventListener("click",function(event){const button=event.target.closest("button[data-mode]");if(button)imageToolsSetMode(button.dataset.mode)});
+
+ imageToolsBindDrop(imageToolsUi.splitDrop,imageToolsUi.splitInput,function(files){const rejected=imageToolsAddFiles(splitState,files);imageToolsInvalidateSplit();imageToolsRenderFileList("split");imageToolsUi.splitSummary.textContent=splitState.files.length+" ファイル";imageToolsRenderSplitPreview();if(rejected)setStatus(rejected+" 個の非対応ファイルを除外しました。","warn")});
+ imageToolsBindDrop(imageToolsUi.mergeDrop,imageToolsUi.mergeInput,function(files){const rejected=imageToolsAddFiles(mergeState,files);imageToolsInvalidateMerge();imageToolsRenderFileList("merge");imageToolsUi.mergeSummary.textContent=mergeState.files.length+" ファイル";imageToolsMarkMergePreviewStale();if(rejected)setStatus(rejected+" 個の非対応ファイルを除外しました。","warn")});
+ [imageToolsUi.splitRows,imageToolsUi.splitCols].forEach(function(el){el.addEventListener("input",function(){imageToolsInvalidateSplit();imageToolsRenderSplitPreview()})});
+ [imageToolsUi.splitFormat,imageToolsUi.splitQuality,imageToolsUi.splitBackground,imageToolsUi.splitBackgroundColor,imageToolsUi.splitLossless].forEach(function(el){el.addEventListener("change",function(){imageToolsInvalidateSplit();imageToolsSyncFormatUi()})});
+ imageToolsUi.splitRun.addEventListener("click",splitImageFiles);imageToolsUi.splitDownloadAll.addEventListener("click",function(){imageToolsDownloadMany(splitState.outputs)});imageToolsUi.splitZip.addEventListener("click",imageToolsDownloadSplitZip);imageToolsUi.splitClear.addEventListener("click",function(){if(splitState.running)return;splitState.files=[];imageToolsInvalidateSplit();imageToolsRenderFileList("split");imageToolsUi.splitSummary.textContent="0 ファイル";imageToolsRenderSplitPreview();imageToolsUi.splitProgress.textContent=""});
+ const mergeSettings=[imageToolsUi.mergeDirection,imageToolsUi.mergeGridCols,imageToolsUi.mergeFit,imageToolsUi.mergeBoxWidth,imageToolsUi.mergeBoxHeight,imageToolsUi.mergeNoUpscale,imageToolsUi.mergeGap,imageToolsUi.mergePadding,imageToolsUi.mergeBackground,imageToolsUi.mergeBackgroundColor,imageToolsUi.mergeFormat,imageToolsUi.mergeQuality,imageToolsUi.mergeLossless,imageToolsUi.mergeName];
+ mergeSettings.forEach(function(el){el.addEventListener("change",function(){imageToolsInvalidateMerge();imageToolsMarkMergePreviewStale();imageToolsSyncFormatUi()});el.addEventListener("input",function(){imageToolsInvalidateMerge();imageToolsMarkMergePreviewStale();imageToolsSyncFormatUi()})});
+ imageToolsUi.mergePreviewBtn.addEventListener("click",imageToolsPreviewMerge);imageToolsUi.mergeRun.addEventListener("click",mergeImageFiles);imageToolsUi.mergeClear.addEventListener("click",function(){if(mergeState.running)return;mergeState.files=[];imageToolsInvalidateMerge();imageToolsRenderFileList("merge");imageToolsUi.mergeSummary.textContent="0 ファイル";imageToolsUi.mergePreview.width=imageToolsUi.mergePreview.height=1;imageToolsUi.mergePreviewInfo.textContent="画像を追加してください。";imageToolsUi.mergeProgress.textContent=""});
+ imageToolsRenderFileList("split");imageToolsRenderFileList("merge");imageToolsRenderSplitOutputs();imageToolsRenderMergeOutput();imageToolsSyncFormatUi();
+ window.addEventListener("beforeunload",function(){imageToolsReleaseSplitOutputs();imageToolsReleaseMergeOutput()});
+}
+imageToolsInstallUi();
+
+const imageToolsBaseRenderCapabilities=renderCapabilities;
+renderCapabilities=function(){imageToolsBaseRenderCapabilities();imageToolsSyncFormatUi()};
